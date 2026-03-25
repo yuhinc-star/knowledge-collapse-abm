@@ -9,11 +9,11 @@ Three knowledge layers:
 
 New mechanism:
   AI (τ_A) substitutes for effort → e* falls → public signal weakens → domain knowledge X_d erodes.
-  When X_d erodes past a trigger threshold, agents generate an adjacent domain d'.
-  d' inherits domain knowledge δ·X_d (transferability δ) and receives a fraction δ of agents.
-  Movers carry expertise that produces a one-time renewal signal in d'.
-  General knowledge = ΣX_d may survive even as individual domains collapse.
-  When d' itself erodes past the trigger, it spawns d'' — cascading across generations.
+  When ΣG(X_d) < G(X_h0), agents' total credit falls below the pre-AI benchmark — they create d'.
+  d' inherits knowledge δ·ΣX_d (convergent: ALL domains contribute) and agents reallocate via
+  credit equilibrium N_d* ∝ G(X_d). Movers carry expertise into d' as a one-time renewal signal.
+  General knowledge = ΣX_d may survive and grow even as individual domains collapse.
+  When d' itself erodes enough to again depress ΣG below G_h0, d'' is created — cascade continues.
 
 Predictions:
   P1  Open economy (δ > 0) weakens or reverses AI-induced collapse of general knowledge.
@@ -110,32 +110,38 @@ def find_collapse_threshold(alpha, lambda_I, lambda_G, sigma_inv2, N, Sigma_sq,
 # ─────────────────────────────────────────────────────────────────────────────
 
 def simulate_open(T, tau_A, alpha, lambda_I, lambda_G, sigma_inv2, N, Sigma_sq,
-                  delta, gamma=0.0, trigger_frac=0.3, max_domains=8):
+                  delta, gamma=0.0, max_domains=8):
     """
-    Open economy with convergent cross-disciplinary recombination.
+    Open economy with endogenous domain creation via credit incentives.
 
-    When any domain erodes past its trigger, ALL active domains collectively generate
-    a new domain d':
-      - Knowledge inheritance (convergent): X_{d',0} = δ · ΣX_d
-      - Agent reallocation (credit equilibrium): N_d* ∝ G(X_d) for all domains incl. d'
-        — agents equalise per-agent expected credit G(X_d)/N_d across domains
-      - Renewal signal (two channels):
-          move term:      λ_G · N_{d'} · Σ_d[G(X_d)/Σ_old_G · e_d]
-                          (movers weighted by domain attractiveness × effort)
-          interact term:  γ · Σ_{i<j} X_i · X_j
-                          (pairwise cross-domain knowledge complementarity)
-    At most one new domain is generated per period.
-    General knowledge = ΣX_d (analyst metric only).
+    Spawn condition (fully endogenous — no exogenous threshold):
+      A new domain d' is created whenever total per-agent credit across all existing
+      domains falls below the pre-AI benchmark:
+          ΣG(X_d) / N  <  G(X_h0) / N   ⟺   ΣG(X_d) < G(X_h0)
+      Interpretation: agents collectively create a new domain when AI has degraded
+      their credit pool below the no-AI equilibrium level. This is individually
+      rational — a new domain with inheritance X_{d',0} = δ·ΣX_d offers positive
+      credit that the existing pool can no longer match at the pre-AI standard.
+
+    At most one new domain per period (cascade is staged, not instantaneous).
+
+    Mechanisms at each spawn:
+      - Convergent inheritance:        X_{d',0} = δ · ΣX_d  (ALL domains contribute)
+      - Credit-equilibrium allocation: N_d* ∝ G(X_d) for all domains including d'
+      - Renewal (move channel):        λ_G · N_{d'} · Σ_d[G(X_d)/Σ_old_G · e_d]
+      - Renewal (interact channel):    γ · Σ_{i<j} X_i · X_j  (pairwise synergy)
+
+    General knowledge = ΣX_d (analyst metric; agents optimise only within their domain).
     """
     kw_ = dict(alpha=alpha, lambda_I=lambda_I, lambda_G=lambda_G,
                sigma_inv2=sigma_inv2, N=N, Sigma_sq=Sigma_sq)
 
     ss0  = find_steady_states(0.0, **kw_)
     X_h0 = max((s for s in ss0 if s > 0.05), default=1.0)
+    G_h0 = float(G(X_h0))          # pre-AI credit benchmark: ΣG must stay above this
 
-    # Each domain: {"X", "X_init", "N", "spawned", "renewal_next"}
-    # Trigger is domain-relative: fires when X <= trigger_frac * X_init
-    domains = [{"X": X_h0, "X_init": X_h0, "N": float(N), "spawned": False, "renewal_next": 0.0}]
+    # Each domain: {"X", "X_init", "N", "renewal_next"}
+    domains = [{"X": X_h0, "X_init": X_h0, "N": float(N), "renewal_next": 0.0}]
 
     X_paths = {0: np.zeros(T)}
     N_paths = {0: np.zeros(T)}
@@ -146,69 +152,60 @@ def simulate_open(T, tau_A, alpha, lambda_I, lambda_G, sigma_inv2, N, Sigma_sq,
         for i in range(len(domains)):
             X_paths[i][t] = domains[i]["X"]
 
-        # ── 2. Check spawning (convergent — at most one per period) ───────────
+        # ── 2. Endogenous spawn check ─────────────────────────────────────────
+        # Spawn iff total credit has fallen below pre-AI benchmark AND room remains
         n_before = len(domains)
-        for i in range(n_before):
-            dom = domains[i]
-            if (not dom["spawned"] and delta > 0.0 and
-                    dom["X"] <= trigger_frac * dom["X_init"] and
-                    len(domains) < max_domains):
+        sum_G    = sum(float(G(domains[j]["X"])) for j in range(n_before))
 
-                dom["spawned"] = True
+        if delta > 0.0 and sum_G < G_h0 and n_before < max_domains:
 
-                # Effort in each active domain (before N changes)
-                efforts = [solve_effort(domains[j]["X"], tau_A, alpha,
-                                        lambda_I, lambda_G, sigma_inv2)
-                           for j in range(n_before)]
+            efforts = [solve_effort(domains[j]["X"], tau_A, alpha,
+                                    lambda_I, lambda_G, sigma_inv2)
+                       for j in range(n_before)]
 
-                # ── Convergent inheritance ────────────────────────────────────
-                total_X = sum(domains[j]["X"] for j in range(n_before))
-                X_new   = delta * total_X
+            # ── Convergent inheritance ────────────────────────────────────────
+            total_X = sum(domains[j]["X"] for j in range(n_before))
+            X_new   = delta * total_X
 
-                # ── Credit-equilibrium agent allocation: N_d* ∝ G(X_d) ───────
-                G_existing = [float(G(domains[j]["X"])) for j in range(n_before)]
-                G_new      = float(G(X_new))
-                G_all      = G_existing + [G_new]
-                total_G    = sum(G_all)
-                if total_G < 1e-15:
-                    N_alloc = [float(N) / (n_before + 1)] * (n_before + 1)
-                else:
-                    N_alloc = [float(N) * gv / total_G for gv in G_all]
-                N_new = N_alloc[-1]
+            # ── Credit-equilibrium agent allocation: N_d* ∝ G(X_d) ───────────
+            G_existing = [float(G(domains[j]["X"])) for j in range(n_before)]
+            G_new      = float(G(X_new))
+            G_all      = G_existing + [G_new]
+            total_G    = sum(G_all)
+            if total_G < 1e-15:
+                N_alloc = [float(N) / (n_before + 1)] * (n_before + 1)
+            else:
+                N_alloc = [float(N) * gv / total_G for gv in G_all]
+            N_new = N_alloc[-1]
 
-                # ── Renewal: move channel ─────────────────────────────────────
-                # Movers come from all domains weighted by G(X_d); each brings e_d
-                old_total_G = sum(G_existing)
-                if old_total_G < 1e-15:
-                    wt = [1.0 / n_before] * n_before
-                else:
-                    wt = [G_existing[j] / old_total_G for j in range(n_before)]
-                renewal_move = lambda_G * N_new * sum(
-                    wt[j] * efforts[j] for j in range(n_before)
-                )
+            # ── Renewal: move channel ─────────────────────────────────────────
+            old_total_G = sum(G_existing)
+            if old_total_G < 1e-15:
+                wt = [1.0 / n_before] * n_before
+            else:
+                wt = [G_existing[j] / old_total_G for j in range(n_before)]
+            renewal_move = lambda_G * N_new * sum(
+                wt[j] * efforts[j] for j in range(n_before))
 
-                # ── Renewal: pairwise cross-domain complementarity ────────────
-                renewal_interact = gamma * sum(
-                    domains[j]["X"] * domains[k]["X"]
-                    for j in range(n_before) for k in range(j + 1, n_before)
-                )
+            # ── Renewal: pairwise cross-domain complementarity ────────────────
+            renewal_interact = gamma * sum(
+                domains[j]["X"] * domains[k]["X"]
+                for j in range(n_before) for k in range(j + 1, n_before))
 
-                # ── Reallocate agents to equilibrium ──────────────────────────
-                for j in range(n_before):
-                    domains[j]["N"] = N_alloc[j]
+            # ── Reallocate agents to equilibrium ──────────────────────────────
+            for j in range(n_before):
+                domains[j]["N"] = N_alloc[j]
 
-                child = {"X": X_new, "X_init": X_new, "N": N_new,
-                         "spawned": False,
-                         "renewal_next": renewal_move + renewal_interact}
-                ci = len(domains)
-                domains.append(child)
-                X_paths[ci] = np.full(T, np.nan)
-                N_paths[ci] = np.full(T, np.nan)
-                X_paths[ci][t] = X_new
-                gen_times.append(t)
-                break  # only one spawn per period
+            child = {"X": X_new, "X_init": X_new, "N": N_new,
+                     "renewal_next": renewal_move + renewal_interact}
+            ci = len(domains)
+            domains.append(child)
+            X_paths[ci] = np.full(T, np.nan)
+            N_paths[ci] = np.full(T, np.nan)
+            X_paths[ci][t] = X_new
+            gen_times.append(t)
 
-        # ── 3. Record N AFTER spawning (parent shows reduced N, child shows its N) ─
+        # ── 3. Record N AFTER spawning ────────────────────────────────────────
         for i in range(len(domains)):
             N_paths[i][t] = domains[i]["N"]
 
@@ -217,13 +214,11 @@ def simulate_open(T, tau_A, alpha, lambda_I, lambda_G, sigma_inv2, N, Sigma_sq,
             e     = solve_effort(dom["X"], tau_A, alpha, lambda_I, lambda_G, sigma_inv2)
             inner = dom["X"] + lambda_G * dom["N"] * e + dom["renewal_next"]
             dom["X"]           = 1.0 / (1.0 / max(inner, 1e-15) + Sigma_sq)
-            dom["renewal_next"] = 0.0  # renewal consumed
+            dom["renewal_next"] = 0.0
 
     n_dom = len(domains)
-    all_X = np.array([X_paths[i] for i in range(n_dom)])  # (n_dom, T)
-    all_N = np.array([N_paths[i] for i in range(n_dom)])  # (n_dom, T)
-
-    # General knowledge = nansum across domains at each period
+    all_X = np.array([X_paths[i] for i in range(n_dom)])
+    all_N = np.array([N_paths[i] for i in range(n_dom)])
     X_general = np.nansum(all_X, axis=0)
 
     return dict(
@@ -231,7 +226,7 @@ def simulate_open(T, tau_A, alpha, lambda_I, lambda_G, sigma_inv2, N, Sigma_sq,
         X_general=X_general,
         gen_times=gen_times,
         n_domains=n_dom,
-        X_h0=X_h0, X_trigger_d0=trigger_frac * X_h0, T=T,
+        X_h0=X_h0, G_h0=G_h0, T=T,
     )
 
 
@@ -258,8 +253,8 @@ st.caption("Extension of Acemoglu, Kong & Ozdaglar (2026) · "
            "Cross-disciplinary recombination as a second spillover channel")
 
 # ── Session state defaults ────────────────────────────────────────────────────
-_DEFAULTS = dict(tau_A=1.0,  delta=0.5,  gamma=0.0,  trigger_frac=0.30, max_domains=4)
-_STRONG   = dict(tau_A=0.68, delta=0.80, gamma=0.05, trigger_frac=0.60, max_domains=6)
+_DEFAULTS = dict(tau_A=1.0,  delta=0.5,  gamma=0.0,  max_domains=4)
+_STRONG   = dict(tau_A=0.85, delta=0.85, gamma=0.05, max_domains=8)
 for k, v in _DEFAULTS.items():
     if k not in st.session_state:
         st.session_state[k] = v
@@ -292,8 +287,14 @@ with st.sidebar:
 
     st.button("⚡ Load strong-reversal config",
               on_click=_load_strong,
-              help="Sets δ=0.80, γ=0.05, trigger=0.60, τ_A=0.68, max_domains=6 — "
-                   "the parameter region where open economy reverses collapse.")
+              help="Sets δ=0.85, γ=0.05, τ_A=0.85, max_domains=8 — "
+                   "the parameter region where open economy strongly reverses collapse.")
+
+    st.caption(
+        "**Spawn trigger (endogenous):** a new domain is created whenever "
+        "ΣG(X_d) < G(X_h0) — total agent credit falls below the pre-AI benchmark. "
+        "No exogenous threshold needed; timing emerges from credit incentives."
+    )
 
     delta = st.slider(
         "Knowledge transferability  δ", 0.0, 1.0, step=0.01, key="delta",
@@ -304,10 +305,6 @@ with st.sidebar:
         help="Pairwise synergy bonus added to renewal at spawn: γ·Σ_{i<j} X_i·X_j. "
              "Captures the insight that combining two knowledge traditions produces "
              "more than the sum of parts. γ=0 → purely additive recombination.")
-    trigger_frac = st.slider(
-        "Generation trigger  (fraction of X_h0)", 0.1, 0.9, step=0.05, key="trigger_frac",
-        help="New domain spawned when X_d falls below this fraction of X_h0. "
-             "Lower → later spawn (more depleted). Higher → earlier spawn.")
     max_domains = st.slider(
         "Max domains", 2, 12, step=1, key="max_domains",
         help="Cap on total number of domains (prevents infinite cascade).")
@@ -324,9 +321,9 @@ def cached_tau_c(alpha, lambda_I, lambda_G, sigma_inv2, N, Sigma_sq):
 
 @st.cache_data(max_entries=128)
 def cached_open(T, tau_A, alpha, lambda_I, lambda_G, sigma_inv2, N, Sigma_sq,
-                delta, gamma, trigger_frac, max_domains):
+                delta, gamma, max_domains):
     return simulate_open(T, tau_A, alpha, lambda_I, lambda_G, sigma_inv2,
-                         N, Sigma_sq, delta, gamma, trigger_frac, max_domains)
+                         N, Sigma_sq, delta, gamma, max_domains)
 
 @st.cache_data(max_entries=128)
 def cached_closed(T, tau_A, alpha, lambda_I, lambda_G, sigma_inv2, N, Sigma_sq):
@@ -334,13 +331,13 @@ def cached_closed(T, tau_A, alpha, lambda_I, lambda_G, sigma_inv2, N, Sigma_sq):
 
 @st.cache_data(max_entries=32)
 def cached_tau_sweep(alpha, lambda_I, lambda_G, sigma_inv2, N, Sigma_sq,
-                     delta, gamma, trigger_frac, max_domains, T, n_pts=20):
+                     delta, gamma, max_domains, T, n_pts=20):
     tau_c  = find_collapse_threshold(alpha, lambda_I, lambda_G, sigma_inv2, N, Sigma_sq)
     taus   = np.linspace(0.0, min(tau_c * 2.0, 3.0), n_pts)
     x_open, x_clos = [], []
     for t_A in taus:
         sim_o = simulate_open(T, t_A, alpha, lambda_I, lambda_G, sigma_inv2,
-                              N, Sigma_sq, delta, gamma, trigger_frac, max_domains)
+                              N, Sigma_sq, delta, gamma, max_domains)
         sim_c = simulate_closed(T, t_A, alpha, lambda_I, lambda_G, sigma_inv2, N, Sigma_sq)
         x_open.append(sim_o["X_general"][-1])
         x_clos.append(sim_c[-1])
@@ -348,24 +345,23 @@ def cached_tau_sweep(alpha, lambda_I, lambda_G, sigma_inv2, N, Sigma_sq,
 
 @st.cache_data(max_entries=32)
 def cached_delta_sweep(tau_A, alpha, lambda_I, lambda_G, sigma_inv2, N, Sigma_sq,
-                       gamma, trigger_frac, max_domains, T, n_pts=15):
+                       gamma, max_domains, T, n_pts=15):
     deltas  = np.linspace(0.0, 1.0, n_pts)
     x_final = []
     for d in deltas:
         sim = simulate_open(T, tau_A, alpha, lambda_I, lambda_G, sigma_inv2,
-                            N, Sigma_sq, d, gamma, trigger_frac, max_domains)
+                            N, Sigma_sq, d, gamma, max_domains)
         x_final.append(sim["X_general"][-1])
     return deltas, np.array(x_final)
 
 tau_c = cached_tau_c(**kw)
-sim_o = cached_open(T, tau_A, **kw, delta=delta, gamma=gamma,
-                    trigger_frac=trigger_frac, max_domains=max_domains)
+sim_o = cached_open(T, tau_A, **kw, delta=delta, gamma=gamma, max_domains=max_domains)
 sim_c = cached_closed(T, tau_A, **kw)
 
 n_dom     = sim_o["n_domains"]
 gen_times = sim_o["gen_times"]
 X_h0      = sim_o["X_h0"]
-X_trigger = sim_o["X_trigger_d0"]
+G_h0      = sim_o["G_h0"]
 
 # ── Top metrics ───────────────────────────────────────────────────────────────
 m1, m2, m3, m4, m5 = st.columns(5)
@@ -400,8 +396,8 @@ with tab1:
     ts = np.arange(T)
     st.caption(
         "Per-domain knowledge X_d (one line per domain) and general knowledge ΣX_d (green dashed). "
-        "Domains are spawned in sequence when their parent erodes past the trigger. "
-        "Dark dotted line = closed economy baseline."
+        "New domains spawn endogenously when total agent credit ΣG(X_d) falls below pre-AI benchmark G(X_h0). "
+        "Dashed horizontal = X_h0 (benchmark for strong reversal). Dotted = closed economy baseline."
     )
 
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
@@ -415,8 +411,8 @@ with tab1:
             label="General knowledge  ΣX_d")
     ax.plot(ts, sim_c, color=C_CLO, lw=1.5, ls=":",
             label="Closed economy  X_d₀  (δ=0)")
-    ax.axhline(X_trigger, color=C_AI, lw=1.1, ls=":", alpha=0.55,
-               label=f"d₀ spawn trigger  ({trigger_frac:.0%} · X_h0={X_trigger:.2f})")
+    ax.axhline(X_h0, color=C_AI, lw=1.1, ls=":", alpha=0.55,
+               label=f"Pre-AI benchmark  X_h0 = {X_h0:.2f}  (strong reversal: ΣX_d exceeds this)")
     for gt in gen_times:
         ax.axvline(gt, color=C_MIG, lw=1.2, ls="--", alpha=0.45)
     if gen_times:
@@ -573,8 +569,7 @@ with tab3:
     run_p1 = st.checkbox("Run τ_A sweep (~20 simulations)", key="run_p1")
     if run_p1:
         taus_sw, x_open_sw, x_clos_sw, tc_sw = cached_tau_sweep(
-            **kw, delta=delta, gamma=gamma,
-            trigger_frac=trigger_frac, max_domains=max_domains, T=T)
+            **kw, delta=delta, gamma=gamma, max_domains=max_domains, T=T)
 
         fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
 
@@ -634,12 +629,10 @@ with tab4:
     )
     run_p2 = st.checkbox("Run δ sweep (~30 simulations)", key="run_p2")
     if run_p2:
-        deltas_sw,  x_delta_sw  = cached_delta_sweep(tau_A,     **kw, gamma=gamma,
-                                                      trigger_frac=trigger_frac,
+        deltas_sw,  x_delta_sw  = cached_delta_sweep(tau_A,    **kw, gamma=gamma,
                                                       max_domains=max_domains, T=T)
         tau_A_hi = min(tau_A * 1.5 + 0.3, 3.0)
-        deltas_sw2, x_delta_sw2 = cached_delta_sweep(tau_A_hi,  **kw, gamma=gamma,
-                                                      trigger_frac=trigger_frac,
+        deltas_sw2, x_delta_sw2 = cached_delta_sweep(tau_A_hi, **kw, gamma=gamma,
                                                       max_domains=max_domains, T=T)
 
         fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
@@ -779,31 +772,48 @@ requires an exogenous shock).  In an open economy, Channel 2 provides a second r
 that AI cannot directly suppress.
 """)
 
-    with st.expander("⚠️  Design decision: domain-relative trigger (not global)"):
+    with st.expander("⚠️  Design decision: endogenous credit-incentive trigger (not exogenous threshold)"):
         st.markdown(f"""
-**Why not a global trigger?**
+**Why not an exogenous threshold?**
 
-An early version fired a spawn when any domain fell below `trigger_frac × X_h0` (the global
-initial value).  This caused an **immediate cascade bug**:
+Early versions fired a spawn when any domain fell below some fixed fraction of its initial value
+(e.g., `trigger_frac × X_{{d,0}}`).  This is exogenous: the threshold is set by the modeller,
+not derived from any agent's incentive.  There are two problems:
 
-- d₀ starts at X_h0 = {X_h0:.3f}.  Trigger fires when X_{{d₀}} ≤ {X_trigger:.3f}.
-- At that moment, d₁ is born with X_{{d₁,0}} = δ · X_{{d₀}} ≤ δ · {X_trigger:.3f} = {delta * X_trigger:.3f}.
-- But the global threshold is still {X_trigger:.3f} > {delta * X_trigger:.3f} → d₁ IMMEDIATELY fires too.
-- d₁ spawns d₂ in the same period.  d₂ spawns d₃.  All max_domains domains spawn at t = 0.
+1. **No economic foundation.** Why 30%? Why 60%? The number has no connection to the credit
+   mechanism that drives everything else in the model.
 
-**Fix — domain-relative trigger:**
+2. **Immediate cascade bug.** If the threshold is global (fraction of X_h0), children are born
+   below the threshold and spawn immediately in the same period — all domains appear at t = 0.
 
-Each domain d fires when **X_{{d,t}} ≤ trigger_frac × X_{{d,0}}** (its own birth value).
+**The correct approach: spawn when it is individually rational to create a new domain.**
 
-d₀: threshold = trigger_frac × {X_h0:.3f} = {X_trigger:.3f}
-d₁: threshold = trigger_frac × X_{{d₁,0}} = trigger_frac × δ · ΣX_d  (much smaller)
+In credit equilibrium, each agent earns `G(X_d) / N_d` per period.  With N agents distributed
+across all existing domains at the credit-equalized allocation, per-agent credit is:
 
-Children must actually erode relative to their own starting point before spawning the next
-generation.  This produces a realistic staged cascade: each generation lives and declines
-at its own scale before giving rise to the next.
+>  c* = **ΣG(X_d) / N**
 
-Current state:  trigger_frac = {trigger_frac:.2f},  d₀ threshold = {X_trigger:.3f},
-δ = {delta:.2f},  domains spawned so far = {n_dom - 1}
+The pre-AI benchmark credit (no AI, one domain at steady state X_h0) is:
+
+>  c₀ = **G(X_h0) / N**
+
+**Endogenous spawn condition:**
+>  **ΣG(X_d) < G(X_h0)**
+
+Interpretation: agents create a new domain when the total credit available in existing domains
+has fallen below the no-AI benchmark.  At that point, a new domain with inheritance
+X_{{d',0}} = δ · ΣX_d offers positive credit that restores the pool above c₀ (if δ is high enough),
+making spawning collectively beneficial.
+
+**Why this fixes the cascade bug:**  at t = 0 with one domain at X_h0,
+ΣG = G(X_h0) = G_h0 = {G_h0:.4f} — exactly at the threshold.  The condition `ΣG < G_h0`
+is FALSE at initialisation, so no immediate spawn.  As AI erodes X_d, ΣG falls and eventually
+crosses the threshold, spawning at the right time.  After each spawn, G(δ·ΣX_d) is added to
+ΣG, which may push it back above G_h0 until further decay brings it down again.
+
+**Current state:**  X_h0 = {X_h0:.3f},  G_h0 = {G_h0:.4f},
+current ΣG = {sum(float(G(sim_o['domain_X'][i][~np.isnan(sim_o['domain_X'][i])][-1])) for i in range(n_dom) if (~np.isnan(sim_o['domain_X'][i])).any()):.4f},
+domains spawned = {n_dom - 1}
 """)
 
     with st.expander("🔀  Convergent inheritance — why ALL domains contribute"):
@@ -933,11 +943,13 @@ when the slope of the curve is steeper at higher τ_A.
 ---
 **Quick-reference: load the strong-reversal config (⚡ button)**
 
-δ = 0.80, γ = 0.05, trigger = 0.60, τ_A = 0.68, max_domains = 6
+δ = 0.85, γ = 0.05, τ_A = 0.85, max_domains = 8
 
-Designed to satisfy (1+δ)^k ≫ inter-spawn decay:
-- (1+0.80) = 1.80 per spawn: each generation multiplies ΣX_d by 1.80
-- trigger = 0.60: spawns fire when domain is still at 60% of birth value → more spawns
-- τ_A = 0.68 > τ_A^c ({tau_c:.3f}): above threshold so domains actually collapse, triggering spawns
-- γ = 0.05: pairwise synergy bonus adds to each spawn's renewal
+With endogenous trigger and these parameters:
+- Each spawn multiplies ΣX_d by (1+0.85) = 1.85. After 3 spawns: 1.85³ ≈ 6.3×.
+- τ_A = 0.85 > τ_A^c ({tau_c:.3f}): domains actively erode, triggering ΣG < G_h0 repeatedly.
+- The endogenous trigger fires earlier (when knowledge is still relatively high) than an
+  exogenous threshold would — giving richer inheritance at each spawn.
+- γ = 0.05 adds pairwise synergy at each spawn, compounding the multiplier effect.
+- max_domains = 8 allows the cascade to run 7 generations.
 """)

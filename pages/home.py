@@ -53,8 +53,8 @@ An extension with cross-disciplinary knowledge recombination.
 
 **What it adds:**
 - Three knowledge layers: task (private, resets), domain (persistent, shared), general (sum)
-- When AI erodes a domain past a trigger, agents collectively generate a *new* domain
-- The new domain inherits knowledge from ALL predecessor domains (convergent inheritance)
+- When AI erodes agent credit below the pre-AI benchmark, agents create a *new* domain (endogenous trigger)
+- The new domain inherits knowledge from ALL predecessor domains: X_{d',0} = δ·ΣX_d
 - Agent migration is endogenous: credit-equilibrium N_d* ∝ G(X_d)
 - Cross-domain complementarity γ: combining knowledge traditions produces synergistic renewal
 
