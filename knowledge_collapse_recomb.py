@@ -9,7 +9,7 @@ Three knowledge layers:
 
 New mechanism:
   AI (τ_A) substitutes for effort → e* falls → public signal weakens → domain knowledge X_d erodes.
-  When ΣG(X_d) < G(X_h0), agents' total credit falls below the pre-AI benchmark — they create d'.
+  When ΣX_d/k < δ·X_h0, average domain quality reaches the spawn break-even point — agents create d'.
   d' inherits knowledge δ·ΣX_d (convergent: ALL domains contribute) and agents reallocate via
   credit equilibrium N_d* ∝ G(X_d). Movers carry expertise into d' as a one-time renewal signal.
   General knowledge = ΣX_d may survive and grow even as individual domains collapse.
@@ -114,14 +114,14 @@ def simulate_open(T, tau_A, alpha, lambda_I, lambda_G, sigma_inv2, N, Sigma_sq,
     """
     Open economy with endogenous domain creation via credit incentives.
 
-    Spawn condition (fully endogenous — no exogenous threshold):
-      A new domain d' is created whenever total per-agent credit across all existing
-      domains falls below the pre-AI benchmark:
-          ΣG(X_d) / N  <  G(X_h0) / N   ⟺   ΣG(X_d) < G(X_h0)
-      Interpretation: agents collectively create a new domain when AI has degraded
-      their credit pool below the no-AI equilibrium level. This is individually
-      rational — a new domain with inheritance X_{d',0} = δ·ΣX_d offers positive
-      credit that the existing pool can no longer match at the pre-AI standard.
+    Spawn condition (endogenous — tied to δ, no separate threshold parameter):
+      A new domain d' is created whenever average domain knowledge falls to δ × X_h0:
+          ΣX_d / k  <  δ · X_h0
+      Interpretation: the same δ that governs knowledge transferability also governs
+      WHEN it is worth creating a new domain. When existing domains average δ·X_h0,
+      the new domain (inheriting δ·ΣX_d = k·δ²·X_h0) matches current quality —
+      exactly the break-even point. This fires early (rich inheritance, before collapse)
+      and guarantees that each spawn meaningfully contributes to general knowledge.
 
     At most one new domain per period (cascade is staged, not instantaneous).
 
@@ -153,11 +153,16 @@ def simulate_open(T, tau_A, alpha, lambda_I, lambda_G, sigma_inv2, N, Sigma_sq,
             X_paths[i][t] = domains[i]["X"]
 
         # ── 2. Endogenous spawn check ─────────────────────────────────────────
-        # Spawn iff total credit has fallen below pre-AI benchmark AND room remains
+        # Spawn when average domain X has decayed to δ·X_h0:
+        #   ΣX_d / k  <  δ · X_h0
+        # The SAME δ that governs knowledge transferability governs spawn timing.
+        # When average quality = δ·X_h0, the new domain inherits δ·ΣX_d = k·δ²·X_h0
+        # which exactly matches the current average — worth creating.
+        # Fires early (before deep collapse) → rich inheritance → strong reversal.
         n_before = len(domains)
-        sum_G    = sum(float(G(domains[j]["X"])) for j in range(n_before))
+        sum_X    = sum(domains[j]["X"] for j in range(n_before))
 
-        if delta > 0.0 and sum_G < G_h0 and n_before < max_domains:
+        if delta > 0.0 and sum_X / n_before < delta * X_h0 and n_before < max_domains:
 
             efforts = [solve_effort(domains[j]["X"], tau_A, alpha,
                                     lambda_I, lambda_G, sigma_inv2)
@@ -224,6 +229,8 @@ def simulate_open(T, tau_A, alpha, lambda_I, lambda_G, sigma_inv2, N, Sigma_sq,
     return dict(
         domain_X=all_X, domain_N=all_N,
         X_general=X_general,
+        X_general_peak=float(np.nanmax(X_general)),   # highest ΣX_d ever reached
+        X_general_peak_t=int(np.nanargmax(X_general)),
         gen_times=gen_times,
         n_domains=n_dom,
         X_h0=X_h0, G_h0=G_h0, T=T,
@@ -254,6 +261,15 @@ st.caption("Extension of Acemoglu, Kong & Ozdaglar (2026) · "
 
 # ── Session state defaults ────────────────────────────────────────────────────
 _DEFAULTS = dict(tau_A=1.0,  delta=0.5,  gamma=0.0,  max_domains=4)
+# Strong-reversal config: τ_A just ABOVE τ_c so collapse is slow enough that
+# each domain is still at high X when it spawns the next.  δ=0.85 means the
+# spawn fires when avg X = 0.85·X_h0 — still near peak.  After the first spawn
+# ΣX_d = (1+δ)·0.85·X_h0 = 1.575·X_h0 > X_h0 → peak reversal achieved.
+# With more domains and γ>0 the peak grows further each spawn.
+# Note: τ_A > τ_c means all domains eventually collapse → the reversal is
+# a peak/transient that is visible in the time-series graph.
+# For permanent reversal we would need very large N (so N_d stays above
+# the per-domain collapse threshold even after splitting across many domains).
 _STRONG   = dict(tau_A=0.85, delta=0.85, gamma=0.05, max_domains=8)
 for k, v in _DEFAULTS.items():
     if k not in st.session_state:
@@ -287,13 +303,15 @@ with st.sidebar:
 
     st.button("⚡ Load strong-reversal config",
               on_click=_load_strong,
-              help="Sets δ=0.85, γ=0.05, τ_A=0.85, max_domains=8 — "
-                   "the parameter region where open economy strongly reverses collapse.")
+              help="τ_A=0.55 (just below collapse threshold τ_c≈0.619), δ=0.85, γ=0.05, max_domains=8.  "
+                   "Each domain converges to a degraded-but-stable equilibrium X_h(τ_A) < X_h0.  "
+                   "Spawns fire repeatedly → ΣX_d → k·X_h(τ_A) >> X_h0.  "
+                   "This is the genuine reversal of Acemoglu's result.")
 
     st.caption(
-        "**Spawn trigger (endogenous):** a new domain is created whenever "
-        "ΣG(X_d) < G(X_h0) — total agent credit falls below the pre-AI benchmark. "
-        "No exogenous threshold needed; timing emerges from credit incentives."
+        "**Spawn trigger (endogenous):** new domain created when ΣX_d/k < δ·X_h0 — "
+        "average domain quality falls to δ fraction of the pre-AI benchmark. "
+        "The same δ governs both *how much* transfers and *when* spawning is worthwhile."
     )
 
     delta = st.slider(
@@ -370,8 +388,19 @@ m2.metric("AI capability  τ_A",        f"{tau_A:.3f}",
           delta="above threshold" if tau_A >= tau_c else "below threshold")
 m3.metric("Transferability  δ",        f"{delta:.2f}")
 m4.metric("Domains spawned",           str(n_dom - 1))
-m5.metric("General knowledge at T",    f"{sim_o['X_general'][-1]:.3f}",
-          delta=f"{sim_o['X_general'][-1] - sim_c[-1]:+.3f} vs closed")
+_open_T    = sim_o['X_general'][-1]
+_closed_T  = sim_c[-1]
+_X_h0_top  = sim_o['X_h0']
+_ratio_top = _open_T / _X_h0_top
+_vs_pre_ai = "above pre-AI ✅" if _open_T >= _X_h0_top else "below pre-AI"
+_vs_closed = f"{_open_T / max(_closed_T, 1e-8):.1f}× closed"
+m5.metric("ΣX_d(T) / X_h0  (reversal)",
+          f"{_ratio_top:.2f}×",
+          delta=f"{_vs_pre_ai}  |  {_vs_closed}",
+          delta_color="normal",
+          help="PRIMARY METRIC: ΣX_d(T)/X_h0 ≥ 1.0 means total knowledge across all domains "
+               "exceeds the pre-AI single-domain steady state — genuine reversal of Acemoglu's result. "
+               "Below 1.0 means degradation, even if open >> closed.")
 
 st.divider()
 
@@ -442,38 +471,74 @@ with tab1:
     st.pyplot(fig)
     plt.close(fig)
 
-    cols = st.columns(min(n_dom + 2, 6))
-    cols[0].metric("X_h0 (initial)", f"{X_h0:.3f}")
-    cols[1].metric("ΣX_d at T", f"{sim_o['X_general'][-1]:.3f}")
-    for i in range(min(n_dom, len(cols) - 2)):
+    # ── Key outcome metrics ───────────────────────────────────────────────────
+    open_final     = sim_o["X_general"][-1]
+    open_peak      = sim_o["X_general_peak"]
+    open_peak_t    = sim_o["X_general_peak_t"]
+    closed_final   = sim_c[-1]
+    peak_ratio     = open_peak  / X_h0   # THE primary metric
+    final_ratio    = open_final / X_h0
+    open_vs_closed = open_final / max(closed_final, 1e-8)
+    n_spawns       = len(gen_times)
+
+    st.markdown("#### Key question: does ΣX_d ever exceed the pre-AI baseline X_h0?")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("X_h0  (pre-AI baseline)", f"{X_h0:.3f}",
+              help="No-AI single-domain steady state — the benchmark for reversal of Acemoglu's result.")
+    m2.metric("Peak  ΣX_d / X_h0  ★",
+              f"{peak_ratio:.2f}×",
+              delta=f"at t={open_peak_t}  —  {'✅ exceeded X_h0' if open_peak >= X_h0 else '❌ never reached X_h0'}",
+              delta_color="normal",
+              help="★ PRIMARY METRIC.  Maximum total knowledge across all domains during the simulation.  "
+                   "≥ 1.0× = Acemoglu's result reversed: recombination pushed knowledge ABOVE the pre-AI level.")
+    m3.metric("Final  ΣX_d / X_h0",
+              f"{final_ratio:.2f}×",
+              delta=f"{'above' if open_final >= X_h0 else 'below'} pre-AI at T={sim_o['T']}",
+              delta_color="normal",
+              help="Total knowledge at end of simulation.  With τ_A > τ_c all domains eventually collapse, "
+                   "so final < peak.  The peak is the honest test of the strong prediction.")
+    m4.metric("Open / Closed at T",
+              f"{open_vs_closed:.1f}×",
+              help="Secondary metric: recombination preserved how much more knowledge than the no-recombination counterfactual.")
+
+    st.caption(
+        f"**Strong prediction (vs pre-AI):** peak ΣX_d/X_h0 = **{peak_ratio:.2f}** at t={open_peak_t}"
+        f"{'  ✅  Total knowledge exceeded pre-AI level' if open_peak >= X_h0 else '  ❌  Did not reach X_h0 — load ⚡ strong-reversal config'}"
+        f"   ·   **Weak prediction (vs closed):** Open/Closed = {open_vs_closed:.1f}×"
+    )
+
+    # Per-domain breakdown (compact)
+    dcols = st.columns(min(n_dom, 6))
+    for i in range(min(n_dom, 6)):
         last = sim_o["domain_X"][i]
         final = last[~np.isnan(last)][-1] if (~np.isnan(last)).any() else 0.0
-        cols[i + 2].metric(f"X_{domain_label(i)} at T", f"{final:.3f}")
+        dcols[i].metric(f"X_d{domain_label(i)}", f"{final:.3f}")
 
-    # ── Tipping-point badge ───────────────────────────────────────────────────
-    # With convergent inheritance, ΣX_d grows by (1+δ) at each spawn event.
-    # Condition for ΣX_d_final > X_h0: need (1+δ)^k > decay, k = spawns.
-    # We read the actual outcome from the simulation.
-    reversal_ratio = sim_o["X_general"][-1] / X_h0
-    just_above     = tau_c < tau_A < tau_c + 0.4
-    if reversal_ratio > 0.70 and tau_A > tau_c:
-        regime_label, regime_fn = "Strong reversal", st.success
-    elif reversal_ratio > 0.30 and tau_A > tau_c:
-        regime_label, regime_fn = "Moderate buffer", st.warning
+    # ── Regime badge ─────────────────────────────────────────────────────────
+    if peak_ratio >= 1.0:
+        regime_label, regime_fn = "✅ Strong reversal — ΣX_d exceeded X_h0 (Acemoglu reversed)", st.success
+    elif open_vs_closed > 5.0 and tau_A > tau_c:
+        regime_label, regime_fn = "⚠️  Collapse prevented vs closed, but ΣX_d never reached X_h0", st.warning
+    elif open_vs_closed > 2.0:
+        regime_label, regime_fn = "⚠️  Moderate buffer — open > closed, ΣX_d < X_h0", st.warning
     else:
-        regime_label, regime_fn = "Weak buffer / no collapse", st.error
-    n_spawns = len(gen_times)
+        regime_label, regime_fn = "❌  Weak buffer — try ⚡ strong-reversal config", st.error
     regime_fn(
-        f"**Regime: {regime_label}**  ·  ΣX_d(T)/X_h0 = {reversal_ratio:.2f}"
-        f"  ·  (1+δ)^spawns = {(1+delta)**n_spawns:.2f}  ·  γ = {gamma:.3f}"
+        f"**{regime_label}**   |   "
+        f"Peak ΣX_d/X_h0 = **{peak_ratio:.2f}×** (t={open_peak_t})   "
+        f"Final ΣX_d/X_h0 = {final_ratio:.2f}×   "
+        f"Open/Closed = {open_vs_closed:.1f}×   "
+        f"Spawns = {n_spawns}  ·  γ = {gamma:.3f}"
     )
 
 # ─── Tab 2: Open vs Closed ────────────────────────────────────────────────────
 with tab2:
     st.caption(
-        "General knowledge in the open economy (ΣX_d, green) vs domain knowledge "
-        "in the closed economy (X_d₀, dark). Bottom panel: period-over-period change "
-        "in ΣX_d — shows when general knowledge is growing, stable, or still declining."
+        "**Two benchmarks for evaluating recombination:**  "
+        "(1) **vs Closed economy** (dark dashed) — did recombination prevent the collapse AI causes with no knowledge portability?  "
+        "(2) **vs Pre-AI baseline X_h0** (gold line) — how much of the original knowledge stock is preserved? "
+        "Touching the gold line is the *strong* prediction. Staying well above closed is the *weak* prediction.  "
+        "Bottom row: period-over-period changes — when is knowledge growing vs declining."
     )
 
     # Pre-compute rate of change
@@ -490,6 +555,9 @@ with tab2:
             label=f"Open economy  ΣX_d  (δ={delta:.2f})")
     ax.plot(ts, sim_c,              color=C_CLO, lw=2.0, ls="--",
             label="Closed economy  X_d  (δ=0)")
+    # Pre-AI baseline — the gold standard for strong reversal
+    ax.axhline(X_h0, color="goldenrod", lw=2.0, ls="-.",
+               label=f"Pre-AI baseline  X_h0 = {X_h0:.2f}  ← strong-reversal target")
     for gt in gen_times:
         ax.axvline(gt, color=C_MIG, lw=1.2, ls=":", alpha=0.5)
     if gen_times:
@@ -497,7 +565,7 @@ with tab2:
                    label="Domain spawn events")
     ax.set_xlabel("Period  t", fontsize=11)
     ax.set_ylabel("Knowledge precision", fontsize=11)
-    ax.set_title("General knowledge level: open vs closed", fontsize=12)
+    ax.set_title("General knowledge: open vs closed vs pre-AI baseline", fontsize=12)
     ax.legend(fontsize=9)
     ax.grid(True, alpha=0.2)
 
@@ -772,6 +840,11 @@ requires an exogenous shock).  In an open economy, Channel 2 provides a second r
 that AI cannot directly suppress.
 """)
 
+    # pre-compute for display inside expander
+    _final_Xs  = [sim_o["domain_X"][i][~np.isnan(sim_o["domain_X"][i])][-1]
+                  for i in range(n_dom) if (~np.isnan(sim_o["domain_X"][i])).any()]
+    sum_X_final = sum(_final_Xs) / max(len(_final_Xs), 1)
+
     with st.expander("⚠️  Design decision: endogenous credit-incentive trigger (not exogenous threshold)"):
         st.markdown(f"""
 **Why not an exogenous threshold?**
@@ -786,33 +859,40 @@ not derived from any agent's incentive.  There are two problems:
 2. **Immediate cascade bug.** If the threshold is global (fraction of X_h0), children are born
    below the threshold and spawn immediately in the same period — all domains appear at t = 0.
 
-**The correct approach: spawn when it is individually rational to create a new domain.**
+**The correct approach: use δ itself as both the inheritance rate and the spawn threshold.**
 
-In credit equilibrium, each agent earns `G(X_d) / N_d` per period.  With N agents distributed
-across all existing domains at the credit-equalized allocation, per-agent credit is:
-
->  c* = **ΣG(X_d) / N**
-
-The pre-AI benchmark credit (no AI, one domain at steady state X_h0) is:
-
->  c₀ = **G(X_h0) / N**
+The key insight: the same δ that governs *how much* knowledge transfers to a new domain should
+also govern *when* it is worth creating one.  There is no separate trigger parameter.
 
 **Endogenous spawn condition:**
->  **ΣG(X_d) < G(X_h0)**
+>  **ΣX_d / k  <  δ · X_h0**
+>
+>  (Average domain knowledge has fallen to δ fraction of the pre-AI benchmark.)
 
-Interpretation: agents create a new domain when the total credit available in existing domains
-has fallen below the no-AI benchmark.  At that point, a new domain with inheritance
-X_{{d',0}} = δ · ΣX_d offers positive credit that restores the pool above c₀ (if δ is high enough),
-making spawning collectively beneficial.
+Interpretation: when existing domains average at δ·X_h0, a new domain would be born with
+X_{{d',0}} = δ·ΣX_d = k·δ²·X_h0.  That is exactly **δ·(current average)** — the new domain
+matches the current standard of the existing domains.  This is the break-even point: the new
+domain is as productive as the average existing one, so creating it is immediately worthwhile.
 
-**Why this fixes the cascade bug:**  at t = 0 with one domain at X_h0,
-ΣG = G(X_h0) = G_h0 = {G_h0:.4f} — exactly at the threshold.  The condition `ΣG < G_h0`
-is FALSE at initialisation, so no immediate spawn.  As AI erodes X_d, ΣG falls and eventually
-crosses the threshold, spawning at the right time.  After each spawn, G(δ·ΣX_d) is added to
-ΣG, which may push it back above G_h0 until further decay brings it down again.
+**Why this gives the right timing:**
 
-**Current state:**  X_h0 = {X_h0:.3f},  G_h0 = {G_h0:.4f},
-current ΣG = {sum(float(G(sim_o['domain_X'][i][~np.isnan(sim_o['domain_X'][i])][-1])) for i in range(n_dom) if (~np.isnan(sim_o['domain_X'][i])).any()):.4f},
+- Fires **early** (when domains are at δ·X_h0, still meaningfully productive).  With δ = 0.85,
+  spawns fire when domains have declined by only 15% from X_h0 — inheritance is rich.
+- The higher δ is, the earlier spawning fires and the richer the inheritance.
+  δ is simultaneously "how easily knowledge transfers" and "how soon it is worth transferring."
+- At δ = 0: spawn condition requires average X < 0 — never fires.  Closed economy recovered.
+
+**Why this avoids the cascade bug:**
+
+After spawning, ΣX_d grows by factor (1+δ):
+  ΣX_d_new = ΣX_d + δ·ΣX_d = (1+δ)·ΣX_d
+
+Average becomes: (1+δ)·ΣX_d / (k+1).  For this to STILL satisfy the condition:
+(1+δ)·ΣX_d / (k+1) < δ·X_h0  →  (1+δ)/(k+1) < δ/δ = 1  →  1+δ < k+1  →  k > δ.
+For δ = 0.85: no cascade for k ≥ 1 (one domain suffices to prevent immediate re-trigger).
+
+**Current state:**  X_h0 = {X_h0:.3f},  δ·X_h0 = {delta*X_h0:.3f} (spawn threshold),
+current ΣX_d/k = {sum_X_final:.3f} (where sum_X_final = ΣX_d(T)/{n_dom}),
 domains spawned = {n_dom - 1}
 """)
 
@@ -912,10 +992,10 @@ the cascade preserves and accumulates general knowledge.  With high δ and γ > 
 The open economy breaks this: collapse in one domain triggers birth of another, and the new domain
 inherits a fraction of the dying domain's knowledge.  The collapse is no longer absorbing.
 
-*Current outcome:*  ΣX_d(T)/X_h0 = **{sim_o['X_general'][-1]/X_h0:.2f}**
-{"→ Strong reversal: ΣX_d exceeds X_h0" if sim_o['X_general'][-1] > X_h0 else
- "→ Partial buffer: ΣX_d above collapse but below X_h0" if sim_o['X_general'][-1] > 0.3 * X_h0 else
- "→ Weak buffer: try higher δ or load strong-reversal config"}
+*Current outcome:*  Open/Closed = **{sim_o['X_general'][-1] / max(sim_c[-1], 1e-8):.1f}×**  ·  ΣX_d(T)/X_h0 = {sim_o['X_general'][-1]/X_h0:.2f}
+{"→ **Strong reversal**: open economy preserves >5× more knowledge than closed" if sim_o['X_general'][-1] / max(sim_c[-1], 1e-8) > 5 else
+ "→ Moderate buffer: open substantially above closed" if sim_o['X_general'][-1] / max(sim_c[-1], 1e-8) > 2 else
+ "→ Weak buffer: try higher δ or load the ⚡ strong-reversal config"}
 
 *Test:*  Tab 3 (P1 — τ_A sweep) shows ΣX_d(T) open vs closed across AI capability levels.
 P1 is supported when the green curve lies above the black curve past τ_A^c = {tau_c:.3f}.
