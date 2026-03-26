@@ -49,24 +49,28 @@ The original model from Acemoglu, Kong & Ozdaglar (2026).
 with col2:
     st.subheader("🌐  Extension Model")
     st.markdown("""
-An extension with cross-disciplinary knowledge recombination.
+An extension that adds cross-disciplinary knowledge recombination as a second spillover channel.
 
 **What it adds:**
-- Three knowledge layers: task (private, resets), domain (persistent, shared), general (sum)
-- When AI erodes agent credit below the pre-AI benchmark, agents create a *new* domain (endogenous trigger)
-- The new domain inherits knowledge from ALL predecessor domains: X_{d',0} = δ·ΣX_d
-- Agent migration is endogenous: credit-equilibrium N_d* ∝ G(X_d)
-- Cross-domain complementarity γ: combining knowledge traditions produces synergistic renewal
+- Three knowledge layers: task (private, resets), domain (persistent, shared), general (Bayesian sum)
+- **Endogenous spawn trigger** (credit-equilibrium): new domain d' created when ΣX_d/k < δ·X_h0 —
+  derived from the same G(X) credit function as the effort FOC, not an arbitrary threshold
+- **Convergent inheritance**: d' receives δ·(Σ w_d·X_d + γ·Σᵢ<ⱼ wᵢ·Xᵢ·wⱼ·Xⱼ) from ALL predecessor domains
+- **Credit-equilibrium migration**: agents allocate as N_d* ∝ G(X_d) — indifferent across domains
+- **γ (Weitzman complementarity)**: combining knowledge traditions creates synergy beyond simple pooling
 
-**Key predictions:**
-- **P1:** Open economy (δ > 0) weakens or reverses AI-induced knowledge collapse
-- **P2:** The benefit of openness (δ) is *largest* when AI capability is strongest
+**Five predictions:**
+- **P1:** There is a threshold δ* — above it ΣX_d grows, below it decays
+- **P2:** ΣX_d trends clearly up or down; almost never flat
+- **P3:** AI+recomb always outperforms AI+closed (open economy always helps)
+- **P4:** AI+recomb outperforms no-AI+recomb — AI is a *complement* to recombination (activates the cascade)
+- **P5:** ΣX_d exceeds pre-AI benchmark X_h0 only when δ > δ*
 
 **What you can explore:**
-- Cascading domain dynamics and the staged-generation mechanism
-- Open vs closed economy comparison at the same AI level
-- Parameter sweeps testing P1 and P2
-- The ⚡ strong-reversal config where ΣX_d actually exceeds baseline X_h0
+- Cascading domain dynamics across all spawned domains
+- Four-way comparison: closed / open / no-AI / pre-AI benchmark
+- P3+P4 (role of AI) and P1+P5 (recombination threshold) sweeps
+- The ⚡ strong-reversal config where ΣX_d genuinely exceeds X_h0
 """)
     if st.button("Open Extension Model →", type="primary", use_container_width=True):
         st.switch_page("knowledge_collapse_recomb.py")
