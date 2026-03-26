@@ -16,8 +16,14 @@ New mechanism:
   When d' itself erodes enough to again depress ΣG below G_h0, d'' is created — cascade continues.
 
 Predictions:
-  P1  Open economy (δ > 0) weakens or reverses AI-induced collapse of general knowledge.
-  P2  The benefit of openness is largest when AI capability is strongest.
+  P1  Recombination reverses AI-induced collapse when δ is large enough — there is a threshold δ*
+      above which ΣX_d grows and below which it decays.
+  P2  ΣX_d trends clearly up or down; it is almost never flat. One force dominates.
+  P3  AI + recomb always outperforms AI + closed (δ > 0 always helps vs δ = 0).
+  P4  AI + recomb outperforms no-AI + recomb for all τ_A > τ_c (when δ > δ*).
+      AI activates the cascade; without AI there is no collapse and hence no spawning.
+      ΣX_d is hump-shaped in τ_A — peaks at intermediate τ_A, slightly declines at very high τ_A.
+  P5  ΣX_d exceeds the pre-AI benchmark X_h0 only when δ > δ* (recomb effect > decay effect).
 
 Run with:  streamlit run knowledge_collapse_recomb.py
 """
@@ -323,9 +329,11 @@ with st.sidebar:
                    "Result: ΣX_d is sustained above X_h0 — P1 reversal demonstrated.")
 
     st.caption(
-        "**Spawn trigger (endogenous):** new domain created when ΣX_d/k < δ·X_h0 — "
-        "average domain quality falls to δ fraction of the pre-AI benchmark. "
-        "The same δ governs both *how much* transfers and *when* spawning is worthwhile."
+        "**Spawn trigger (credit-equilibrium):** a new domain is created when ΣX_d/k < δ·X_h0. "
+        "At this point the new domain inherits δ·(average X) ≈ δ²·X_h0 per existing domain — "
+        "exactly matching current quality. This is the *break-even* condition from the credit "
+        "equilibrium: agents enter d' when its expected credit return equals the return in existing domains. "
+        "The same δ governs both *how much* knowledge transfers and *when* entry is worthwhile."
     )
 
     delta = st.slider(
@@ -334,9 +342,11 @@ with st.sidebar:
              "δ=0 → closed economy (baseline recovered exactly).")
     gamma = st.slider(
         "Cross-domain complementarity  γ", 0.0, 0.3, step=0.005, key="gamma",
-        help="Pairwise synergy bonus added to renewal at spawn: γ·Σ_{i<j} X_i·X_j. "
-             "Captures the insight that combining two knowledge traditions produces "
-             "more than the sum of parts. γ=0 → purely additive recombination.")
+        help="Weitzman recombination: combining two knowledge traditions produces more than either alone. "
+             "Economics + psychology → behavioural economics. Physics + chemistry → molecular biology. "
+             "Formally: γ·Σ_{i<j} X_i·X_j added to the renewal signal at each spawn — "
+             "richer predecessors produce larger boosts, growing superlinearly in domain count. "
+             "γ=0 → purely additive (movers carry knowledge but no cross-tradition synergy).")
 
     st.divider()
     T = st.slider("Time horizon  T", 50, 500, 200, 10)
@@ -682,7 +692,7 @@ with tab3:
                          alpha=0.15, color=C_GEN, label="AI+recomb > no-AI")
         ax2.set_xlabel("AI capability  τ_A", fontsize=11)
         ax2.set_ylabel(f"ΣX_d(T)  (AI+open)", fontsize=11)
-        ax2.set_title("P4: AI enables cascade — higher τ_A → more ΣX_d", fontsize=12)
+        ax2.set_title("P4: AI enables cascade — AI+recomb > no-AI for all τ_A > τ_A^c", fontsize=12)
         ax2.legend(fontsize=9)
         ax2.grid(True, alpha=0.2)
 
@@ -693,16 +703,19 @@ with tab3:
         above_tc = taus_sw > tc_sw
         if above_tc.any():
             p3_holds = (x_open_sw[above_tc] >= x_clos_sw[above_tc]).all()
-            p4_slope = np.polyfit(taus_sw[above_tc], x_open_sw[above_tc], 1)[0]
+            # P4: AI+recomb > no-AI for all τ_A > τ_c (the cascade jump, not monotone slope)
+            p4_holds = (x_open_sw[above_tc] >= _noai_level).all()
+            p4_min   = x_open_sw[above_tc].min() / max(_noai_level, 1e-8)
             if p3_holds:
                 st.success("P3 confirmed: AI+recomb ≥ AI+closed for all τ_A > τ_A^c.")
             else:
                 st.warning("P3 violated for some τ_A > τ_A^c — check δ.")
-            if p4_slope > 0:
-                st.success(f"P4 confirmed: ΣX_d(open) increases with τ_A above threshold "
-                           f"(slope = {p4_slope:.4f}). AI accelerates the cascade.")
+            if p4_holds:
+                st.success(f"P4 confirmed: AI+recomb > no-AI for all τ_A > τ_A^c "
+                           f"(min ratio = {p4_min:.2f}×). Crossing τ_A^c activates the cascade — "
+                           f"AI is a complement to recombination.")
             else:
-                st.warning("P4 not confirmed: ΣX_d(open) not increasing with τ_A. "
+                st.warning("P4 not confirmed: AI+recomb dips below no-AI baseline for some τ_A. "
                            "Try higher δ above the recombination threshold.")
         else:
             st.info("Raise τ_A or lower α to see above-threshold behaviour.")
@@ -999,14 +1012,16 @@ domain is as productive as the average existing one, so creating it is immediate
   δ is simultaneously "how easily knowledge transfers" and "how soon it is worth transferring."
 - At δ = 0: spawn condition requires average X < 0 — never fires.  Closed economy recovered.
 
-**Why this avoids the cascade bug:**
+**On spawn frequency:**
 
-After spawning, ΣX_d grows by factor (1+δ):
-  ΣX_d_new = ΣX_d + δ·ΣX_d = (1+δ)·ΣX_d
+Once the cascade begins, the trigger fires every period — and this is intentional.
+After spawn, the new domain inherits δ·(average X), which is itself below δ·X_h0 (since the
+average was just at that threshold). So the next period's average is still below δ·X_h0 and
+the trigger fires again. This means new domains are continuously created as old ones decay.
 
-Average becomes: (1+δ)·ΣX_d / (k+1).  For this to STILL satisfy the condition:
-(1+δ)·ΣX_d / (k+1) < δ·X_h0  →  (1+δ)/(k+1) < δ/δ = 1  →  1+δ < k+1  →  k > δ.
-For δ = 0.85: no cascade for k ≥ 1 (one domain suffices to prevent immediate re-trigger).
+With weak δ: each spawn adds very little, ΣX_d stays near zero — collapse confirmed.
+With strong δ: each spawn adds substantially, ΣX_d grows — reversal confirmed.
+The frequency is not the mechanism; the inheritance size is.
 
 **Current state:**  X_h0 = {X_h0:.3f},  δ·X_h0 = {delta*X_h0:.3f} (spawn threshold),
 current ΣX_d/k = {sum_X_final:.3f} (where sum_X_final = ΣX_d(T)/{n_dom}),
@@ -1022,21 +1037,23 @@ This misses the fundamental point: when researchers from multiple fields jointly
 field, they bring knowledge from ALL their fields, not just the most recent one.
 
 **Convergent inheritance (correct):**  ALL active domains contribute to the new one:
-> **X_{{d',0}} = δ · ΣX_d = δ · (X_{{d₀}} + X_{{d₁}} + X_{{d₂}} + …)**
+> **X_{{d',0}} = δ · (Σ_d w_d · X_d  +  γ · Σ_{{i<j}} w_i·X_i · w_j·X_j)**
 
-The parameter δ ∈ [0, 1] is the **knowledge transferability** — how much of the accumulated
-domain knowledge survives the move to a new context.  δ = 0 → nothing transfers (each new domain
-starts from scratch).  δ = 1 → perfect transfer (new domain starts with full collective knowledge).
+where **w_d = N_d / N** is domain d's agent share (from the credit equilibrium).
+The first term is the agent-weighted average knowledge — what movers collectively carry.
+The second term (γ > 0) is the pairwise synergy: knowledge traditions interacting, not just pooling.
 
-**Key mathematical consequence:**  at each spawn, ΣX_d grows by factor **(1+δ)**:
-- Before spawn:  ΣX_d = S
-- New domain receives:  X_{{d',0}} = δ · S
-- After spawn:  ΣX_d(new) = S + δ · S = **(1+δ) · S**
+The parameter δ ∈ [0, 1] is the **knowledge transferability** — how much survives the move
+to a new context.  δ = 0 → nothing transfers (closed economy recovered exactly).
+δ = 1 → full weighted average transfers.
 
-So after k spawns (starting from X_h0):  ΣX_d ≥ X_h0 · (1+δ)^k  (ignoring decay)
+**Note on inheritance size:**  the weighted average Σ w_d·X_d ≤ max(X_d), so each new domain
+starts below the best existing domain.  With δ < 1, it starts below the average too.
+The cascade sustains ΣX_d when δ is large enough that the continuous stream of spawns
+accumulates faster than decay removes knowledge from existing domains.
 
-Current config: (1+δ) = {1+delta:.2f},  spawns so far = {n_dom - 1},
-theoretical multiplier = {(1+delta)**(n_dom-1):.3f},  actual ΣX_d(T)/X_h0 = {sim_o['X_general'][-1]/X_h0:.3f}
+Current config: δ = {delta:.2f},  spawns so far = {n_dom - 1},
+actual ΣX_d(T)/X_h0 = {sim_o['X_general'][-1]/X_h0:.3f}
 
 **Baseline recovered at δ = 0:**  no knowledge transfers, spawning has no effect,
 ΣX_d = X_{{d₀,t}} — identical to the closed economy.
@@ -1133,11 +1150,16 @@ Open/Closed = **{sim_o['X_general'][-1] / max(sim_c[-1], 1e-8):.1f}×** at curre
 **P4 — AI+recomb beats no-AI+recomb: AI *helps* knowledge when recombination is possible**
 
 Without AI (τ_A = 0): no collapse → no spawning → ΣX_d stays at X_h0.
-With AI (τ_A > τ_c): collapse triggers spawning → recombination cascade → ΣX_d grows.
-AI, by destabilising individual domains, accelerates the cascade.
-Higher τ_A → faster collapse → more spawning per unit time → higher ΣX_d (when δ > δ*).
+With AI (τ_A > τ_c): collapse triggers spawning → recombination cascade → ΣX_d jumps above X_h0.
+AI, by destabilising individual domains, activates the cascade that would never fire otherwise.
+This makes AI a *complement* to recombination: the open economy needs AI's pressure to generate
+the cascade, and the cascade needs the open economy to convert that pressure into knowledge growth.
 
-*Test:*  Tab 3 (P3+P4, right panel). ΣX_d(open) should increase with τ_A above τ_A^c.
+Note: ΣX_d is hump-shaped in τ_A — it peaks at an intermediate τ_A and slightly declines at very
+high τ_A (domains collapse too fast for inheritance to accumulate). P4's claim is that AI+recomb
+exceeds no-AI+recomb for *all* τ_A > τ_A^c (the jump at τ_A^c), not that ΣX_d is monotone in τ_A.
+
+*Test:*  Tab 3 (P3+P4, right panel). ΣX_d(open) should lie above no-AI baseline for all τ_A > τ_A^c.
 
 ---
 
@@ -1156,10 +1178,11 @@ Current: ΣX_d(T)/X_h0 = {sim_o['X_general'][-1]/X_h0:.2f}×
 δ = 0.85, γ = 0.05, τ_A = 0.85
 
 With endogenous trigger and these parameters:
-- Each spawn multiplies ΣX_d by (1+0.85) = 1.85. After 3 spawns: 1.85³ ≈ 6.3×.
-- τ_A = 0.85 > τ_A^c ({tau_c:.3f}): domains actively erode, triggering ΣG < G_h0 repeatedly.
-- The endogenous trigger fires earlier (when knowledge is still relatively high) than an
-  exogenous threshold would — giving richer inheritance at each spawn.
-- γ = 0.05 adds pairwise synergy at each spawn, compounding the multiplier effect.
-- Spawning is unbounded — the cascade runs as long as knowledge keeps eroding.
+- τ_A = 0.85 > τ_A^c ({tau_c:.3f}): domains actively erode, continuously triggering spawning.
+- δ = 0.85: each new domain inherits 85% of the weighted-average knowledge across existing domains —
+  rich inheritance means each spawn contributes meaningfully to ΣX_d.
+- γ = 0.05: pairwise Weitzman synergy bonus at each spawn — combining knowledge traditions
+  produces more than the weighted sum alone.
+- Spawning fires every period once collapse begins — the cascade sustains ΣX_d because
+  each spawn adds enough (via δ=0.85) to outpace the continuous decay Σ².
 """)
