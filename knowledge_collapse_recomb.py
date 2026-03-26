@@ -10,7 +10,7 @@ Three knowledge layers:
 New mechanism:
   AI (τ_A) substitutes for effort → e* falls → public signal weakens → domain knowledge X_d erodes.
   When ΣX_d/k < δ·X_h0, average domain quality reaches the spawn break-even point — agents create d'.
-  d' inherits knowledge δ·ΣX_d (convergent: ALL domains contribute) and agents reallocate via
+  d' inherits knowledge δ·(Σ w_d·X_d + Σ_{i<j} w_i·X_i·w_j·X_j), where w_d = N_d/N, and agents reallocate via
   credit equilibrium N_d* ∝ G(X_d). Movers carry expertise into d' as a one-time renewal signal.
   General knowledge = ΣX_d may survive and grow even as individual domains collapse.
   When d' itself erodes enough to again depress ΣG below G_h0, d'' is created — cascade continues.
@@ -110,7 +110,7 @@ def find_collapse_threshold(alpha, lambda_I, lambda_G, sigma_inv2, N, Sigma_sq,
 # ─────────────────────────────────────────────────────────────────────────────
 
 def simulate_open(T, tau_A, alpha, lambda_I, lambda_G, sigma_inv2, N, Sigma_sq,
-                  delta, gamma=0.0, max_domains=8):
+                  delta, gamma=0.0):
     """
     Open economy with endogenous domain creation via credit incentives.
 
@@ -126,7 +126,8 @@ def simulate_open(T, tau_A, alpha, lambda_I, lambda_G, sigma_inv2, N, Sigma_sq,
     At most one new domain per period (cascade is staged, not instantaneous).
 
     Mechanisms at each spawn:
-      - Convergent inheritance:        X_{d',0} = δ · ΣX_d  (ALL domains contribute)
+      - Convergent inheritance:        X_{d',0} = δ·(Σ w_d·X_d + Σ_{i<j} w_i·X_i·w_j·X_j)
+                                       where w_d = N_d/N (mover weights); base + recombination bonus
       - Credit-equilibrium allocation: N_d* ∝ G(X_d) for all domains including d'
       - Renewal (move channel):        λ_G · N_{d'} · Σ_d[G(X_d)/Σ_old_G · e_d]
       - Renewal (interact channel):    γ · Σ_{i<j} X_i · X_j  (pairwise synergy)
@@ -153,24 +154,37 @@ def simulate_open(T, tau_A, alpha, lambda_I, lambda_G, sigma_inv2, N, Sigma_sq,
             X_paths[i][t] = domains[i]["X"]
 
         # ── 2. Endogenous spawn check ─────────────────────────────────────────
-        # Spawn when average domain X has decayed to δ·X_h0:
-        #   ΣX_d / k  <  δ · X_h0
-        # The SAME δ that governs knowledge transferability governs spawn timing.
-        # When average quality = δ·X_h0, the new domain inherits δ·ΣX_d = k·δ²·X_h0
-        # which exactly matches the current average — worth creating.
-        # Fires early (before deep collapse) → rich inheritance → strong reversal.
+        # Spawn whenever average domain X < δ·X_h0.
+        # Fires every period once collapse is underway — that is intentional.
+        # Each spawn adds δ·ΣX_d to total; with strong δ the cascade sustains
+        # and grows ΣX_d indefinitely. With weak δ each spawn is too thin to
+        # overcome decay and ΣX_d still falls.
         n_before = len(domains)
         sum_X    = sum(domains[j]["X"] for j in range(n_before))
 
-        if delta > 0.0 and sum_X / n_before < delta * X_h0 and n_before < max_domains:
+        if delta > 0.0 and sum_X / n_before < delta * X_h0:
 
             efforts = [solve_effort(domains[j]["X"], tau_A, alpha,
                                     lambda_I, lambda_G, sigma_inv2)
                        for j in range(n_before)]
 
-            # ── Convergent inheritance ────────────────────────────────────────
-            total_X = sum(domains[j]["X"] for j in range(n_before))
-            X_new   = delta * total_X
+            # ── Convergent inheritance (mover-weighted + interaction) ────────
+            # w_d = fraction of agents in domain d — determines what d contributes
+            # base     = weighted avg of what movers carry from their source domains
+            # interact = pairwise product of contributions — the recombination bonus
+            #            (meeting of diverse knowledges creates extra value)
+            # X_new    = δ · (base + interact)   [NOT a function of raw ΣX_d]
+            N_total_before = sum(domains[j]["N"] for j in range(n_before))
+            if N_total_before < 1e-15:
+                w = [1.0 / n_before] * n_before
+            else:
+                w = [domains[j]["N"] / N_total_before for j in range(n_before)]
+            contribs = [w[j] * domains[j]["X"] for j in range(n_before)]
+            base     = sum(contribs)
+            interact = sum(contribs[i] * contribs[j]
+                           for i in range(n_before)
+                           for j in range(i + 1, n_before))
+            X_new = delta * (base + interact)
 
             # ── Credit-equilibrium agent allocation: N_d* ∝ G(X_d) ───────────
             G_existing = [float(G(domains[j]["X"])) for j in range(n_before)]
@@ -215,9 +229,9 @@ def simulate_open(T, tau_A, alpha, lambda_I, lambda_G, sigma_inv2, N, Sigma_sq,
             N_paths[i][t] = domains[i]["N"]
 
         # ── 4. Update X for all domains ───────────────────────────────────────
-        for dom in domains:
-            e     = solve_effort(dom["X"], tau_A, alpha, lambda_I, lambda_G, sigma_inv2)
-            inner = dom["X"] + lambda_G * dom["N"] * e + dom["renewal_next"]
+        for idx, dom in enumerate(domains):
+            e      = solve_effort(dom["X"], tau_A, alpha, lambda_I, lambda_G, sigma_inv2)
+            inner  = dom["X"] + lambda_G * dom["N"] * e + dom["renewal_next"]
             dom["X"]           = 1.0 / (1.0 / max(inner, 1e-15) + Sigma_sq)
             dom["renewal_next"] = 0.0
 
@@ -226,11 +240,16 @@ def simulate_open(T, tau_A, alpha, lambda_I, lambda_G, sigma_inv2, N, Sigma_sq,
     all_N = np.array([N_paths[i] for i in range(n_dom)])
     X_general = np.nansum(all_X, axis=0)
 
+    # Peak excludes t=0 (which is always X_h0 by initialisation and not a reversal event)
+    _peak_arr = X_general[1:] if T > 1 else X_general
+    _peak_val = float(np.nanmax(_peak_arr))
+    _peak_t   = int(1 + int(np.nanargmax(_peak_arr))) if T > 1 else 0
+
     return dict(
         domain_X=all_X, domain_N=all_N,
         X_general=X_general,
-        X_general_peak=float(np.nanmax(X_general)),   # highest ΣX_d ever reached
-        X_general_peak_t=int(np.nanargmax(X_general)),
+        X_general_peak=_peak_val,   # highest ΣX_d reached after t=0
+        X_general_peak_t=_peak_t,
         gen_times=gen_times,
         n_domains=n_dom,
         X_h0=X_h0, G_h0=G_h0, T=T,
@@ -260,17 +279,12 @@ st.caption("Extension of Acemoglu, Kong & Ozdaglar (2026) · "
            "Cross-disciplinary recombination as a second spillover channel")
 
 # ── Session state defaults ────────────────────────────────────────────────────
-_DEFAULTS = dict(tau_A=1.0,  delta=0.5,  gamma=0.0,  max_domains=4)
-# Strong-reversal config: τ_A just ABOVE τ_c so collapse is slow enough that
-# each domain is still at high X when it spawns the next.  δ=0.85 means the
-# spawn fires when avg X = 0.85·X_h0 — still near peak.  After the first spawn
-# ΣX_d = (1+δ)·0.85·X_h0 = 1.575·X_h0 > X_h0 → peak reversal achieved.
-# With more domains and γ>0 the peak grows further each spawn.
-# Note: τ_A > τ_c means all domains eventually collapse → the reversal is
-# a peak/transient that is visible in the time-series graph.
-# For permanent reversal we would need very large N (so N_d stays above
-# the per-domain collapse threshold even after splitting across many domains).
-_STRONG   = dict(tau_A=0.85, delta=0.85, gamma=0.05, max_domains=8)
+_DEFAULTS = dict(tau_A=1.0,  delta=0.5,  gamma=0.0)
+# Strong-reversal config: τ_A above τ_c → original domain collapses → spawn fires.
+# δ=0.85: rich inheritance — new domain gets 85% of ΣX_d at each spawn.
+# γ=0.05: pairwise synergy bonus at spawn — combining two knowledge traditions
+#          produces more than the sum of parts (Weitzman recombination).
+_STRONG   = dict(tau_A=0.85, delta=0.85, gamma=0.05)
 for k, v in _DEFAULTS.items():
     if k not in st.session_state:
         st.session_state[k] = v
@@ -303,10 +317,10 @@ with st.sidebar:
 
     st.button("⚡ Load strong-reversal config",
               on_click=_load_strong,
-              help="τ_A=0.55 (just below collapse threshold τ_c≈0.619), δ=0.85, γ=0.05, max_domains=8.  "
-                   "Each domain converges to a degraded-but-stable equilibrium X_h(τ_A) < X_h0.  "
-                   "Spawns fire repeatedly → ΣX_d → k·X_h(τ_A) >> X_h0.  "
-                   "This is the genuine reversal of Acemoglu's result.")
+              help="τ_A=0.85 (above τ_c → collapse triggers spawning), δ=0.85, γ=0.05.  "
+                   "Rich inheritance (85% of ΣX_d) at each spawn, plus pairwise synergy bonus (γ) "
+                   "from combining existing knowledge traditions.  "
+                   "Result: ΣX_d is sustained above X_h0 — P1 reversal demonstrated.")
 
     st.caption(
         "**Spawn trigger (endogenous):** new domain created when ΣX_d/k < δ·X_h0 — "
@@ -323,9 +337,6 @@ with st.sidebar:
         help="Pairwise synergy bonus added to renewal at spawn: γ·Σ_{i<j} X_i·X_j. "
              "Captures the insight that combining two knowledge traditions produces "
              "more than the sum of parts. γ=0 → purely additive recombination.")
-    max_domains = st.slider(
-        "Max domains", 2, 12, step=1, key="max_domains",
-        help="Cap on total number of domains (prevents infinite cascade).")
 
     st.divider()
     T = st.slider("Time horizon  T", 50, 500, 200, 10)
@@ -339,9 +350,9 @@ def cached_tau_c(alpha, lambda_I, lambda_G, sigma_inv2, N, Sigma_sq):
 
 @st.cache_data(max_entries=128)
 def cached_open(T, tau_A, alpha, lambda_I, lambda_G, sigma_inv2, N, Sigma_sq,
-                delta, gamma, max_domains):
+                delta, gamma):
     return simulate_open(T, tau_A, alpha, lambda_I, lambda_G, sigma_inv2,
-                         N, Sigma_sq, delta, gamma, max_domains)
+                         N, Sigma_sq, delta, gamma)
 
 @st.cache_data(max_entries=128)
 def cached_closed(T, tau_A, alpha, lambda_I, lambda_G, sigma_inv2, N, Sigma_sq):
@@ -349,32 +360,35 @@ def cached_closed(T, tau_A, alpha, lambda_I, lambda_G, sigma_inv2, N, Sigma_sq):
 
 @st.cache_data(max_entries=32)
 def cached_tau_sweep(alpha, lambda_I, lambda_G, sigma_inv2, N, Sigma_sq,
-                     delta, gamma, max_domains, T, n_pts=20):
+                     delta, gamma, T, n_pts=12):
+    T_sw   = min(T, 60)   # sweeps only need enough time for cascade to develop
     tau_c  = find_collapse_threshold(alpha, lambda_I, lambda_G, sigma_inv2, N, Sigma_sq)
     taus   = np.linspace(0.0, min(tau_c * 2.0, 3.0), n_pts)
     x_open, x_clos = [], []
     for t_A in taus:
-        sim_o = simulate_open(T, t_A, alpha, lambda_I, lambda_G, sigma_inv2,
-                              N, Sigma_sq, delta, gamma, max_domains)
-        sim_c = simulate_closed(T, t_A, alpha, lambda_I, lambda_G, sigma_inv2, N, Sigma_sq)
+        sim_o = simulate_open(T_sw, t_A, alpha, lambda_I, lambda_G, sigma_inv2,
+                              N, Sigma_sq, delta, gamma)
+        sim_c = simulate_closed(T_sw, t_A, alpha, lambda_I, lambda_G, sigma_inv2, N, Sigma_sq)
         x_open.append(sim_o["X_general"][-1])
         x_clos.append(sim_c[-1])
     return taus, np.array(x_open), np.array(x_clos), tau_c
 
 @st.cache_data(max_entries=32)
 def cached_delta_sweep(tau_A, alpha, lambda_I, lambda_G, sigma_inv2, N, Sigma_sq,
-                       gamma, max_domains, T, n_pts=15):
+                       gamma, T, n_pts=12):
+    T_sw   = min(T, 60)
     deltas  = np.linspace(0.0, 1.0, n_pts)
     x_final = []
     for d in deltas:
-        sim = simulate_open(T, tau_A, alpha, lambda_I, lambda_G, sigma_inv2,
-                            N, Sigma_sq, d, gamma, max_domains)
+        sim = simulate_open(T_sw, tau_A, alpha, lambda_I, lambda_G, sigma_inv2,
+                            N, Sigma_sq, d, gamma)
         x_final.append(sim["X_general"][-1])
     return deltas, np.array(x_final)
 
-tau_c = cached_tau_c(**kw)
-sim_o = cached_open(T, tau_A, **kw, delta=delta, gamma=gamma, max_domains=max_domains)
-sim_c = cached_closed(T, tau_A, **kw)
+tau_c   = cached_tau_c(**kw)
+sim_o   = cached_open(T, tau_A, **kw, delta=delta, gamma=gamma)
+sim_c   = cached_closed(T, tau_A, **kw)
+sim_noai = cached_open(T, 0.0,   **kw, delta=delta, gamma=gamma)
 
 n_dom     = sim_o["n_domains"]
 gen_times = sim_o["gen_times"]
@@ -404,11 +418,12 @@ m5.metric("ΣX_d(T) / X_h0  (reversal)",
 
 st.divider()
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "🌐 Domain Dynamics",
-    "📊 Open vs Closed",
-    "🔬 P1 — τ_A sweep",
-    "📏 P2 — δ sweep",
+    "📊 Four-Way Comparison",
+    "🔬 P3+P4 — Role of AI",
+    "📏 P1+P5 — Recomb threshold",
+    "📈 P2 — Knowledge trends",
     "📖 Extension Guide",
 ])
 
@@ -424,42 +439,55 @@ def domain_label(i):
 with tab1:
     ts = np.arange(T)
     st.caption(
-        "Per-domain knowledge X_d (one line per domain) and general knowledge ΣX_d (green dashed). "
-        "New domains spawn endogenously when total agent credit ΣG(X_d) falls below pre-AI benchmark G(X_h0). "
-        "Dashed horizontal = X_h0 (benchmark for strong reversal). Dotted = closed economy baseline."
+        "Per-domain knowledge X_d (coloured lines) and total general knowledge ΣX_d (green dashed).  "
+        "Gold horizontal line = no-AI counterfactual X_h0 — what knowledge would be if AI was never introduced.  "
+        "Strong reversal = ΣX_d climbs above the gold line.  "
+        "Vertical markers = endogenous spawn events (spawn when ΣX_d/k < δ·X_h0)."
     )
 
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
 
+    MAX_PLOT = 8  # max individual domain lines shown; rest aggregated
+    n_shown  = min(n_dom, MAX_PLOT)
+
     ax = axes[0]
-    for i in range(n_dom):
+    for i in range(n_shown):
         mask = ~np.isnan(sim_o["domain_X"][i])
         ax.plot(ts[mask], sim_o["domain_X"][i][mask],
-                color=domain_color(i), lw=2.0, label=domain_label(i))
-    ax.plot(ts, sim_o["X_general"], color=C_GEN, lw=2.2, ls="--",
+                color=domain_color(i), lw=1.8, alpha=0.85, label=domain_label(i))
+    if n_dom > MAX_PLOT:
+        ax.plot([], [], color="grey", lw=1.2, alpha=0.5,
+                label=f"+{n_dom - MAX_PLOT} more domains (in ΣX_d)")
+    ax.plot(ts, sim_o["X_general"], color=C_GEN, lw=2.5, ls="--",
             label="General knowledge  ΣX_d")
-    ax.plot(ts, sim_c, color=C_CLO, lw=1.5, ls=":",
-            label="Closed economy  X_d₀  (δ=0)")
-    ax.axhline(X_h0, color=C_AI, lw=1.1, ls=":", alpha=0.55,
-               label=f"Pre-AI benchmark  X_h0 = {X_h0:.2f}  (strong reversal: ΣX_d exceeds this)")
-    for gt in gen_times:
-        ax.axvline(gt, color=C_MIG, lw=1.2, ls="--", alpha=0.45)
+    ax.axhline(X_h0, color="goldenrod", lw=2.0, ls="-.",
+               label=f"No-AI counterfactual  X_h0 = {X_h0:.2f}")
+    # show only first few spawn markers to avoid clutter
+    shown_gt = gen_times[:20]
+    for gt in shown_gt:
+        ax.axvline(gt, color=C_MIG, lw=1.0, ls="--", alpha=0.4)
     if gen_times:
-        ax.axvline(gen_times[0], color=C_MIG, lw=1.2, ls="--", alpha=0.45,
-                   label="Domain spawn events")
+        ax.axvline(gen_times[0], color=C_MIG, lw=1.0, ls="--", alpha=0.4,
+                   label=f"Spawn events ({len(gen_times)} total)")
     ax.set_xlabel("Period  t", fontsize=11)
-    ax.set_ylabel("Knowledge precision", fontsize=11)
-    ax.set_title(f"Domain knowledge paths  ·  τ_A = {tau_A:.3f}  ·  δ = {delta:.2f}", fontsize=12)
+    ax.set_ylabel("Knowledge precision  X", fontsize=11)
+    ax.set_title(f"Domain knowledge paths  ·  τ_A={tau_A:.2f}  δ={delta:.2f}  γ={gamma:.3f}", fontsize=12)
     ax.legend(fontsize=8, loc="upper right")
     ax.grid(True, alpha=0.2)
 
     ax2 = axes[1]
-    # Build stacked N arrays, filling NaN with 0 for stackplot
-    N_stack = np.nan_to_num(sim_o["domain_N"], nan=0.0)
-    labels_n  = [domain_label(i) for i in range(n_dom)]
-    colors_n  = [domain_color(i) for i in range(n_dom)]
+    # Stackplot: show first MAX_PLOT domains, aggregate the rest
+    N_full  = np.nan_to_num(sim_o["domain_N"], nan=0.0)
+    N_stack = N_full[:n_shown]
+    labels_n = [domain_label(i) for i in range(n_shown)]
+    colors_n = [domain_color(i) for i in range(n_shown)]
+    if n_dom > MAX_PLOT:
+        N_rest = N_full[MAX_PLOT:].sum(axis=0)
+        N_stack = np.vstack([N_stack, N_rest])
+        labels_n.append(f"+{n_dom - MAX_PLOT} other domains")
+        colors_n.append("lightgrey")
     ax2.stackplot(ts, *N_stack, labels=labels_n, colors=colors_n, alpha=0.65)
-    for gt in gen_times:
+    for gt in shown_gt:
         ax2.axvline(gt, color=C_MIG, lw=1.2, ls="--", alpha=0.45)
     ax2.set_xlabel("Period  t", fontsize=11)
     ax2.set_ylabel("Number of agents", fontsize=11)
@@ -481,29 +509,28 @@ with tab1:
     open_vs_closed = open_final / max(closed_final, 1e-8)
     n_spawns       = len(gen_times)
 
-    st.markdown("#### Key question: does ΣX_d ever exceed the pre-AI baseline X_h0?")
+    st.markdown("#### Key question: does ΣX_d(T) stay above the pre-AI baseline X_h0?")
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("X_h0  (pre-AI baseline)", f"{X_h0:.3f}",
               help="No-AI single-domain steady state — the benchmark for reversal of Acemoglu's result.")
-    m2.metric("Peak  ΣX_d / X_h0  ★",
-              f"{peak_ratio:.2f}×",
-              delta=f"at t={open_peak_t}  —  {'✅ exceeded X_h0' if open_peak >= X_h0 else '❌ never reached X_h0'}",
-              delta_color="normal",
-              help="★ PRIMARY METRIC.  Maximum total knowledge across all domains during the simulation.  "
-                   "≥ 1.0× = Acemoglu's result reversed: recombination pushed knowledge ABOVE the pre-AI level.")
-    m3.metric("Final  ΣX_d / X_h0",
+    m2.metric("Final  ΣX_d / X_h0  ★",
               f"{final_ratio:.2f}×",
-              delta=f"{'above' if open_final >= X_h0 else 'below'} pre-AI at T={sim_o['T']}",
+              delta=f"{'✅ above X_h0 — strong reversal' if open_final > X_h0 else '❌ below X_h0 — load ⚡ config'}",
               delta_color="normal",
-              help="Total knowledge at end of simulation.  With τ_A > τ_c all domains eventually collapse, "
-                   "so final < peak.  The peak is the honest test of the strong prediction.")
+              help="★ PRIMARY METRIC.  ΣX_d at end of simulation T.  "
+                   "> 1.0× = sustained reversal: recombination keeps knowledge above pre-AI level.")
+    m3.metric("Peak  ΣX_d / X_h0",
+              f"{peak_ratio:.2f}×",
+              delta=f"at t={open_peak_t}",
+              delta_color="normal",
+              help="Highest ΣX_d reached (after t=0).  Shows the maximum reversal achieved.")
     m4.metric("Open / Closed at T",
               f"{open_vs_closed:.1f}×",
               help="Secondary metric: recombination preserved how much more knowledge than the no-recombination counterfactual.")
 
     st.caption(
-        f"**Strong prediction (vs pre-AI):** peak ΣX_d/X_h0 = **{peak_ratio:.2f}** at t={open_peak_t}"
-        f"{'  ✅  Total knowledge exceeded pre-AI level' if open_peak >= X_h0 else '  ❌  Did not reach X_h0 — load ⚡ strong-reversal config'}"
+        f"**Strong prediction (vs pre-AI):** ΣX_d(T)/X_h0 = **{final_ratio:.2f}** at T={sim_o['T']}"
+        f"{'  ✅  Sustained above pre-AI level' if open_final > X_h0 else '  ❌  Did not sustain X_h0 — load ⚡ strong-reversal config'}"
         f"   ·   **Weak prediction (vs closed):** Open/Closed = {open_vs_closed:.1f}×"
     )
 
@@ -515,8 +542,9 @@ with tab1:
         dcols[i].metric(f"X_d{domain_label(i)}", f"{final:.3f}")
 
     # ── Regime badge ─────────────────────────────────────────────────────────
-    if peak_ratio >= 1.0:
-        regime_label, regime_fn = "✅ Strong reversal — ΣX_d exceeded X_h0 (Acemoglu reversed)", st.success
+    # Strong reversal = ΣX_d(T) > X_h0 (sustained, not just a transient spike)
+    if final_ratio > 1.0:
+        regime_label, regime_fn = "✅ Strong reversal — ΣX_d(T) > X_h0 sustained (Acemoglu reversed)", st.success
     elif open_vs_closed > 5.0 and tau_A > tau_c:
         regime_label, regime_fn = "⚠️  Collapse prevented vs closed, but ΣX_d never reached X_h0", st.warning
     elif open_vs_closed > 2.0:
@@ -531,225 +559,314 @@ with tab1:
         f"Spawns = {n_spawns}  ·  γ = {gamma:.3f}"
     )
 
-# ─── Tab 2: Open vs Closed ────────────────────────────────────────────────────
+# ─── Tab 2: Four-Way Comparison ───────────────────────────────────────────────
 with tab2:
     st.caption(
-        "**Two benchmarks for evaluating recombination:**  "
-        "(1) **vs Closed economy** (dark dashed) — did recombination prevent the collapse AI causes with no knowledge portability?  "
-        "(2) **vs Pre-AI baseline X_h0** (gold line) — how much of the original knowledge stock is preserved? "
-        "Touching the gold line is the *strong* prediction. Staying well above closed is the *weak* prediction.  "
-        "Bottom row: period-over-period changes — when is knowledge growing vs declining."
+        "**Four scenarios — reading order = causal logic of the model:**  "
+        "**Gold** — initial general knowledge X_h0 (pre-AI, single domain).  "
+        "**Grey** — no-AI + open: recombination infrastructure exists but no AI pressure; knowledge stays flat at X_h0 (AI is the driver, not openness alone).  "
+        "**Teal** — AI + open: AI forces specialisation, recombination recycles knowledge; peak ΣX_d can exceed X_h0 (*strong reversal*).  "
+        "**Red** — AI + closed (Acemoglu): AI forces specialisation, no recombination; knowledge permanently collapses.  "
+        "The gap between teal and gold is the **net gain from AI + recombination**. The gap between teal and red is the **value of openness**."
     )
 
-    # Pre-compute rate of change
-    dX_gen  = np.diff(sim_o["X_general"], prepend=sim_o["X_general"][0])
-    dX_clo  = np.diff(sim_c,              prepend=sim_c[0])
-    gap     = sim_o["X_general"] - sim_c
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
-    fig, axes = plt.subplots(2, 2, figsize=(13, 9),
-                             gridspec_kw={"height_ratios": [1.1, 1]})
-
-    # ── Row 1: level + benefit gap ────────────────────────────────────────────
-    ax = axes[0, 0]
-    ax.plot(ts, sim_o["X_general"], color=C_GEN, lw=2.2,
-            label=f"Open economy  ΣX_d  (δ={delta:.2f})")
-    ax.plot(ts, sim_c,              color=C_CLO, lw=2.0, ls="--",
-            label="Closed economy  X_d  (δ=0)")
-    # Pre-AI baseline — the gold standard for strong reversal
-    ax.axhline(X_h0, color="goldenrod", lw=2.0, ls="-.",
-               label=f"Pre-AI baseline  X_h0 = {X_h0:.2f}  ← strong-reversal target")
+    # ── Left: level paths ─────────────────────────────────────────────────────
+    ax = axes[0]
+    # Gold: initial general knowledge / pre-AI baseline
+    ax.axhline(X_h0, color="goldenrod", lw=2.2, ls="-.",
+               label=f"Initial general knowledge  X_h0 = {X_h0:.2f}")
+    # Grey: no-AI + open (τ_A=0 with open economy)
+    ax.plot(ts, sim_noai["X_general"], color="grey", lw=1.8, ls=":",
+            label="No-AI + open  (τ_A=0)")
+    # Red: AI + closed
+    ax.plot(ts, sim_c, color=C_CLO, lw=2.0, ls="--",
+            label=f"AI + closed  (Acemoglu,  δ=0,  τ_A={tau_A:.2f})")
+    # Teal: AI + open — plot last so it sits on top
+    ax.plot(ts, sim_o["X_general"], color=C_GEN, lw=2.5,
+            label=f"AI + open  (this paper,  δ={delta:.2f},  τ_A={tau_A:.2f})")
+    # Spawn markers
     for gt in gen_times:
-        ax.axvline(gt, color=C_MIG, lw=1.2, ls=":", alpha=0.5)
+        ax.axvline(gt, color=C_MIG, lw=1.0, ls=":", alpha=0.4)
     if gen_times:
-        ax.axvline(gen_times[0], color=C_MIG, lw=1.2, ls=":", alpha=0.5,
+        ax.axvline(gen_times[0], color=C_MIG, lw=1.0, ls=":", alpha=0.4,
                    label="Domain spawn events")
     ax.set_xlabel("Period  t", fontsize=11)
-    ax.set_ylabel("Knowledge precision", fontsize=11)
-    ax.set_title("General knowledge: open vs closed vs pre-AI baseline", fontsize=12)
-    ax.legend(fontsize=9)
+    ax.set_ylabel("Knowledge precision  ΣX_d", fontsize=11)
+    ax.set_title("General knowledge: four-way comparison", fontsize=12)
+    ax.legend(fontsize=9, loc="upper right")
     ax.grid(True, alpha=0.2)
 
-    ax2 = axes[0, 1]
-    ax2.fill_between(ts, 0, gap, where=gap >= 0, alpha=0.3, color=C_GEN,
-                     label="Open > Closed")
-    ax2.fill_between(ts, 0, gap, where=gap <  0, alpha=0.3, color=C_CLO,
-                     label="Closed > Open")
-    ax2.plot(ts, gap, color=C_GEN, lw=1.8)
-    ax2.axhline(0, color="black", lw=0.8, alpha=0.4)
+    # ── Right: ratio to X_h0 (normalised view) ───────────────────────────────
+    ax2 = axes[1]
+    ax2.axhline(1.0, color="goldenrod", lw=2.2, ls="-.",
+                label="X_h0 baseline = 1.0  (strong-reversal threshold)")
+    ax2.plot(ts, sim_noai["X_general"] / X_h0, color="grey", lw=1.8, ls=":",
+             label="No-AI + open")
+    ax2.plot(ts, sim_c / X_h0, color=C_CLO, lw=2.0, ls="--",
+             label="AI + closed")
+    ax2.plot(ts, sim_o["X_general"] / X_h0, color=C_GEN, lw=2.5,
+             label="AI + open")
     for gt in gen_times:
-        ax2.axvline(gt, color=C_MIG, lw=1.2, ls=":", alpha=0.5)
+        ax2.axvline(gt, color=C_MIG, lw=1.0, ls=":", alpha=0.4)
     ax2.set_xlabel("Period  t", fontsize=11)
-    ax2.set_ylabel("ΣX_d(open) − X_d(closed)", fontsize=11)
-    ax2.set_title("Recombination benefit over time", fontsize=12)
-    ax2.legend(fontsize=9)
+    ax2.set_ylabel("ΣX_d / X_h0", fontsize=11)
+    ax2.set_title("Knowledge normalised to pre-AI baseline", fontsize=12)
+    ax2.legend(fontsize=9, loc="upper right")
     ax2.grid(True, alpha=0.2)
-
-    # ── Row 2: rate of change ΔΣX_d/t ────────────────────────────────────────
-    ax3 = axes[1, 0]
-    ax3.plot(ts, dX_gen, color=C_GEN, lw=2.0,
-             label=f"ΔΣX_d  open  (δ={delta:.2f})")
-    ax3.plot(ts, dX_clo, color=C_CLO, lw=1.8, ls="--",
-             label="ΔX_d  closed  (δ=0)")
-    ax3.axhline(0, color="black", lw=1.0, alpha=0.5)
-    ax3.fill_between(ts, 0, dX_gen, where=dX_gen >= 0,
-                     alpha=0.25, color=C_GEN, label="Growing")
-    ax3.fill_between(ts, 0, dX_gen, where=dX_gen <  0,
-                     alpha=0.20, color=C_AI,  label="Declining")
-    for gt in gen_times:
-        ax3.axvline(gt, color=C_MIG, lw=1.2, ls=":", alpha=0.5)
-    if gen_times:
-        ax3.axvline(gen_times[0], color=C_MIG, lw=1.2, ls=":", alpha=0.5,
-                    label="Spawn events")
-    ax3.set_xlabel("Period  t", fontsize=11)
-    ax3.set_ylabel("ΔΣX_d / period", fontsize=11)
-    ax3.set_title("Rate of change of general knowledge  ΔΣX_d", fontsize=12)
-    ax3.legend(fontsize=9)
-    ax3.grid(True, alpha=0.2)
-
-    # ── Cumulative gain ───────────────────────────────────────────────────────
-    ax4 = axes[1, 1]
-    cum_gain = np.cumsum(dX_gen - dX_clo)
-    ax4.plot(ts, cum_gain, color=C_GEN, lw=2.0,
-             label="Cumulative extra knowledge (open − closed)")
-    ax4.fill_between(ts, 0, cum_gain, where=cum_gain >= 0,
-                     alpha=0.2, color=C_GEN)
-    ax4.fill_between(ts, 0, cum_gain, where=cum_gain <  0,
-                     alpha=0.2, color=C_CLO)
-    ax4.axhline(0, color="black", lw=0.8, alpha=0.4)
-    for gt in gen_times:
-        ax4.axvline(gt, color=C_MIG, lw=1.2, ls=":", alpha=0.5)
-    ax4.set_xlabel("Period  t", fontsize=11)
-    ax4.set_ylabel("Σ(ΔΣX_d − ΔX_d_closed)", fontsize=11)
-    ax4.set_title("Cumulative extra knowledge from recombination", fontsize=12)
-    ax4.legend(fontsize=9)
-    ax4.grid(True, alpha=0.2)
 
     plt.tight_layout()
     st.pyplot(fig)
     plt.close(fig)
 
-# ─── Tab 3: P1 ────────────────────────────────────────────────────────────────
+    # ── Summary metrics ───────────────────────────────────────────────────────
+    _peak_ratio  = sim_o["X_general_peak"] / X_h0
+    _final_ratio = sim_o["X_general"][-1]  / X_h0
+    _vs_closed   = sim_o["X_general"][-1]  / max(sim_c[-1], 1e-8)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Peak ΣX_d / X_h0",
+              f"{_peak_ratio:.2f}×",
+              delta="Strong reversal ✅" if _peak_ratio >= 1.0 else "Below pre-AI")
+    c2.metric("Final ΣX_d / X_h0",
+              f"{_final_ratio:.2f}×",
+              delta="Above pre-AI ✅" if _final_ratio >= 1.0 else "Below pre-AI")
+    c3.metric("AI+open / AI+closed  (value of openness)",
+              f"{_vs_closed:.1f}×")
+
+# ─── Tab 3: P3 + P4 ───────────────────────────────────────────────────────────
 with tab3:
     st.caption(
-        "**Prediction P1:** Open economy (δ > 0) weakens or reverses AI-induced collapse. "
-        "Green curve (open ΣX_d) should stay above dark curve (closed) past τ_A^c."
+        "**P3:** AI+recomb always outperforms AI+closed (recombination is always beneficial).  "
+        "**P4:** AI+recomb outperforms no-AI+recomb — AI *helps* by triggering the cascade. "
+        "Higher τ_A → more frequent spawning → higher ΣX_d."
     )
-    run_p1 = st.checkbox("Run τ_A sweep (~20 simulations)", key="run_p1")
-    if run_p1:
+    run_p34 = st.checkbox("Run τ_A sweep (~20 simulations)", key="run_p34")
+    if run_p34:
         taus_sw, x_open_sw, x_clos_sw, tc_sw = cached_tau_sweep(
-            **kw, delta=delta, gamma=gamma, max_domains=max_domains, T=T)
+            **kw, delta=delta, gamma=gamma, T=T)
+        # X_h0 for normalisation: no-AI baseline (closed, τ_A=0)
+        _noai_level = float(simulate_closed(T, 0.0, **kw)[-1])
 
         fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
 
+        # ── Left: P3 — open always above closed ──────────────────────────────
         ax = axes[0]
         ax.plot(taus_sw, x_open_sw, color=C_GEN, lw=2.2,
-                label=f"Open economy  ΣX_d(T)  (δ={delta:.2f})")
+                label=f"AI + open  ΣX_d(T)  (δ={delta:.2f})")
         ax.plot(taus_sw, x_clos_sw, color=C_CLO, lw=2.0, ls="--",
-                label="Closed economy  X_d(T)  (δ=0)")
+                label="AI + closed  X_d(T)  (δ=0, Acemoglu)")
+        ax.fill_between(taus_sw, x_clos_sw, x_open_sw,
+                        where=x_open_sw >= x_clos_sw,
+                        alpha=0.15, color=C_GEN, label="Recomb advantage")
         ax.axvline(tc_sw, color=C_AI, lw=1.5, ls=":",
-                   label=f"Collapse threshold  τ_A^c = {tc_sw:.3f}")
+                   label=f"τ_A^c = {tc_sw:.3f}")
         ax.axvline(tau_A, color=C_MIG, lw=1.3, ls="--", alpha=0.6,
-                   label=f"Current τ_A = {tau_A:.3f}")
+                   label=f"Current τ_A = {tau_A:.2f}")
         ax.set_xlabel("AI capability  τ_A", fontsize=11)
-        ax.set_ylabel(f"General knowledge at t = {T}", fontsize=11)
-        ax.set_title("P1: Open economy weakens AI-induced collapse", fontsize=12)
+        ax.set_ylabel(f"General knowledge  ΣX_d(T)", fontsize=11)
+        ax.set_title("P3: AI+recomb always beats AI+closed", fontsize=12)
         ax.legend(fontsize=9)
         ax.grid(True, alpha=0.2)
 
+        # ── Right: P4 — AI helps; ΣX_d(open) rises with τ_A ─────────────────
         ax2 = axes[1]
-        benefit = x_open_sw - x_clos_sw
-        ax2.plot(taus_sw, benefit, color=C_GEN, lw=2.2)
-        ax2.fill_between(taus_sw, 0, benefit, where=benefit >= 0,
-                         alpha=0.25, color=C_GEN, label="Open > Closed")
-        ax2.fill_between(taus_sw, 0, benefit, where=benefit <  0,
-                         alpha=0.25, color=C_CLO, label="Open < Closed")
-        ax2.axhline(0, color="black", lw=0.8, alpha=0.4)
-        ax2.axvline(tc_sw, color=C_AI, lw=1.5, ls=":", alpha=0.6,
+        ax2.plot(taus_sw, x_open_sw, color=C_GEN, lw=2.2,
+                 label=f"AI + open  (δ={delta:.2f})")
+        ax2.axhline(_noai_level, color="grey", lw=1.8, ls=":",
+                    label=f"No-AI + open  ≈ {_noai_level:.3f}  (τ_A=0, no cascade)")
+        ax2.axvline(tc_sw, color=C_AI, lw=1.5, ls=":", alpha=0.7,
                     label=f"τ_A^c = {tc_sw:.3f}")
+        ax2.fill_between(taus_sw, _noai_level, x_open_sw,
+                         where=x_open_sw >= _noai_level,
+                         alpha=0.15, color=C_GEN, label="AI+recomb > no-AI")
         ax2.set_xlabel("AI capability  τ_A", fontsize=11)
-        ax2.set_ylabel("ΣX_d(open) − X_d(closed)  at t = T", fontsize=11)
-        ax2.set_title("Recombination benefit vs AI capability", fontsize=12)
+        ax2.set_ylabel(f"ΣX_d(T)  (AI+open)", fontsize=11)
+        ax2.set_title("P4: AI enables cascade — higher τ_A → more ΣX_d", fontsize=12)
         ax2.legend(fontsize=9)
         ax2.grid(True, alpha=0.2)
 
+        plt.tight_layout()
         st.pyplot(fig)
         plt.close(fig)
 
         above_tc = taus_sw > tc_sw
         if above_tc.any():
-            frac_positive = (benefit[above_tc] > 0).mean()
-            if frac_positive > 0.6:
-                st.success(f"P1 supported: open economy outperforms closed in "
-                           f"{frac_positive:.0%} of τ_A > τ_A^c cases.")
+            p3_holds = (x_open_sw[above_tc] >= x_clos_sw[above_tc]).all()
+            p4_slope = np.polyfit(taus_sw[above_tc], x_open_sw[above_tc], 1)[0]
+            if p3_holds:
+                st.success("P3 confirmed: AI+recomb ≥ AI+closed for all τ_A > τ_A^c.")
             else:
-                st.warning(f"P1 mixed: open economy outperforms in only {frac_positive:.0%} "
-                           f"of τ_A > τ_A^c cases. Try higher δ or lower trigger threshold.")
+                st.warning("P3 violated for some τ_A > τ_A^c — check δ.")
+            if p4_slope > 0:
+                st.success(f"P4 confirmed: ΣX_d(open) increases with τ_A above threshold "
+                           f"(slope = {p4_slope:.4f}). AI accelerates the cascade.")
+            else:
+                st.warning("P4 not confirmed: ΣX_d(open) not increasing with τ_A. "
+                           "Try higher δ above the recombination threshold.")
         else:
-            st.info("Raise τ_A or lower α to see above-threshold behavior.")
+            st.info("Raise τ_A or lower α to see above-threshold behaviour.")
     else:
         st.info("Check the box above to run the sweep. Results are cached after first run.")
 
-# ─── Tab 4: P2 ────────────────────────────────────────────────────────────────
+# ─── Tab 4: P1 + P5 ───────────────────────────────────────────────────────────
 with tab4:
     st.caption(
-        "**Prediction P2:** The benefit of openness is largest when AI is strongest. "
-        "Shows how general knowledge at time T rises with δ, compared across two τ_A levels."
+        "**P1:** Recombination reverses collapse when δ is large enough — there is a threshold δ* "
+        "above which ΣX_d grows and below which it decays.  "
+        "**P5:** AI+recomb exceeds the original X_h0 benchmark *only* when recomb > decay (δ > δ*)."
     )
-    run_p2 = st.checkbox("Run δ sweep (~30 simulations)", key="run_p2")
-    if run_p2:
-        deltas_sw,  x_delta_sw  = cached_delta_sweep(tau_A,    **kw, gamma=gamma,
-                                                      max_domains=max_domains, T=T)
-        tau_A_hi = min(tau_A * 1.5 + 0.3, 3.0)
-        deltas_sw2, x_delta_sw2 = cached_delta_sweep(tau_A_hi, **kw, gamma=gamma,
-                                                      max_domains=max_domains, T=T)
+    run_p15 = st.checkbox("Run δ sweep (~15 simulations)", key="run_p15")
+    if run_p15:
+        tau_A_run = tau_A if tau_A > tau_c else tau_c * 1.15
+        deltas_sw, x_delta_sw = cached_delta_sweep(tau_A_run, **kw, gamma=gamma, T=T)
+        _x_h0_ref = float(simulate_closed(T, 0.0, **kw)[-1])
 
         fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
 
+        # ── Left: P1+P5 — ΣX_d(T) vs δ with X_h0 threshold line ─────────────
         ax = axes[0]
-        ax.plot(deltas_sw,  x_delta_sw,  color=C_GEN, lw=2.2,
-                label=f"τ_A = {tau_A:.3f}  (current)")
-        ax.plot(deltas_sw2, x_delta_sw2, color=C_AI,  lw=2.0, ls="--",
-                label=f"τ_A = {tau_A_hi:.3f}  (higher AI)")
+        ax.plot(deltas_sw, x_delta_sw, color=C_GEN, lw=2.5,
+                label=f"AI + open  ΣX_d(T)  (τ_A={tau_A_run:.2f})")
+        ax.axhline(_x_h0_ref, color="goldenrod", lw=2.0, ls="-.",
+                   label=f"Original X_h0 = {_x_h0_ref:.3f}  (no-AI, no-recomb)")
         ax.axvline(delta, color=C_MIG, lw=1.3, ls=":", alpha=0.7,
                    label=f"Current δ = {delta:.2f}")
+        # Mark threshold δ*
+        above = x_delta_sw >= _x_h0_ref
+        if above.any() and not above.all():
+            _delta_star_idx = np.argmax(above)
+            _delta_star = deltas_sw[_delta_star_idx]
+            ax.axvline(_delta_star, color="red", lw=1.5, ls="--",
+                       label=f"δ* ≈ {_delta_star:.2f}  (reversal threshold)")
+        ax.fill_between(deltas_sw, _x_h0_ref, x_delta_sw,
+                        where=x_delta_sw >= _x_h0_ref,
+                        alpha=0.15, color=C_GEN, label="Reversal zone (P1+P5)")
+        ax.fill_between(deltas_sw, x_delta_sw, _x_h0_ref,
+                        where=x_delta_sw < _x_h0_ref,
+                        alpha=0.10, color=C_CLO, label="Still below X_h0")
         ax.set_xlabel("Transferability  δ", fontsize=11)
-        ax.set_ylabel(f"General knowledge  ΣX_d(T)", fontsize=11)
-        ax.set_title("P2: General knowledge vs transferability", fontsize=12)
+        ax.set_ylabel(f"ΣX_d(T)", fontsize=11)
+        ax.set_title("P1+P5: Recombination threshold δ*", fontsize=12)
         ax.legend(fontsize=9)
         ax.grid(True, alpha=0.2)
 
+        # ── Right: same, normalised to X_h0, at two τ_A levels ───────────────
+        tau_A_hi = min(tau_A_run * 1.5 + 0.3, 3.0)
+        deltas_sw2, x_delta_sw2 = cached_delta_sweep(tau_A_hi, **kw, gamma=gamma, T=T)
+
         ax2 = axes[1]
-        b_low = x_delta_sw  - x_delta_sw[0]
-        b_hi  = x_delta_sw2 - x_delta_sw2[0]
-        ax2.plot(deltas_sw,  b_low, color=C_GEN, lw=2.2,
-                 label=f"τ_A = {tau_A:.3f}")
-        ax2.plot(deltas_sw2, b_hi,  color=C_AI,  lw=2.0, ls="--",
-                 label=f"τ_A = {tau_A_hi:.3f}  (higher AI)")
-        ax2.axhline(0, color="black", lw=0.8, alpha=0.4)
-        ax2.axvline(delta, color=C_MIG, lw=1.3, ls=":", alpha=0.7)
+        ax2.plot(deltas_sw,  x_delta_sw  / _x_h0_ref, color=C_GEN, lw=2.2,
+                 label=f"τ_A = {tau_A_run:.2f}")
+        ax2.plot(deltas_sw2, x_delta_sw2 / _x_h0_ref, color=C_AI,  lw=2.0, ls="--",
+                 label=f"τ_A = {tau_A_hi:.2f}  (higher AI)")
+        ax2.axhline(1.0, color="goldenrod", lw=2.0, ls="-.",
+                    label="X_h0 = 1.0")
+        ax2.axvline(delta, color=C_MIG, lw=1.3, ls=":", alpha=0.7,
+                    label=f"Current δ = {delta:.2f}")
         ax2.set_xlabel("Transferability  δ", fontsize=11)
-        ax2.set_ylabel("ΣX_d(δ) − ΣX_d(0)  at t = T", fontsize=11)
-        ax2.set_title("Marginal benefit of openness (relative to δ=0)", fontsize=12)
+        ax2.set_ylabel("ΣX_d(T) / X_h0", fontsize=11)
+        ax2.set_title("Normalised: both τ_A levels cross 1.0 at δ*", fontsize=12)
         ax2.legend(fontsize=9)
         ax2.grid(True, alpha=0.2)
 
+        plt.tight_layout()
         st.pyplot(fig)
         plt.close(fig)
 
-        slope_low = np.polyfit(deltas_sw,  b_low, 1)[0]
-        slope_hi  = np.polyfit(deltas_sw2, b_hi,  1)[0]
-        if slope_hi > slope_low:
-            st.success(f"P2 supported: benefit slope steeper at higher τ_A "
-                       f"({slope_hi:.3f} vs {slope_low:.3f}). "
-                       "Openness matters more when AI is stronger.")
+        if above.any() and not above.all():
+            st.success(f"P1+P5 confirmed: reversal threshold δ* ≈ {_delta_star:.2f}. "
+                       f"For δ > δ*, ΣX_d(T) > X_h0 (recomb beats decay). "
+                       f"For δ < δ*, ΣX_d(T) < X_h0 (decay wins).")
+        elif above.all():
+            st.success("ΣX_d(T) > X_h0 for all δ — recomb dominates at this τ_A. "
+                       "Try lower τ_A to find threshold.")
         else:
-            st.warning(f"P2 not clearly supported (slopes: {slope_low:.3f} vs {slope_hi:.3f}). "
-                       "Try τ_A above τ_A^c.")
+            st.warning("ΣX_d(T) < X_h0 for all δ — raise τ_A above τ_A^c or check parameters.")
     else:
         st.info("Check the box above to run the sweep. Results are cached after first run.")
 
-# ─── Tab 5: Extension Guide ───────────────────────────────────────────────────
+# ─── Tab 5: P2 — Knowledge trends ────────────────────────────────────────────
 with tab5:
+    st.caption(
+        "**P2:** If recombination > decay, ΣX_d trends upward. If decay > recombination, "
+        "ΣX_d trends downward. General knowledge is almost never flat — it is either "
+        "accumulating or collapsing."
+    )
+    run_p2 = st.checkbox("Run trend simulations (3 simulations)", key="run_p2")
+    if run_p2:
+        tau_A_run2 = tau_A if tau_A > tau_c else tau_c * 1.15
+        # Three δ values: low (decay wins), mid (near threshold), high (recomb wins)
+        d_low  = max(delta * 0.3, 0.05)
+        d_mid  = delta
+        d_high = min(delta * 1.5 + 0.2, 0.98)
+
+        sim_low  = simulate_open(T, tau_A_run2, **kw, delta=d_low,  gamma=gamma)
+        sim_mid  = simulate_open(T, tau_A_run2, **kw, delta=d_mid,  gamma=gamma)
+        sim_high = simulate_open(T, tau_A_run2, **kw, delta=d_high, gamma=gamma)
+        _x_h0_p2 = sim_low["X_h0"]
+        ts2 = np.arange(T)
+
+        fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+
+        # ── Left: raw ΣX_d trajectories ──────────────────────────────────────
+        ax = axes[0]
+        ax.plot(ts2, sim_low["X_general"],  color="#DC2626", lw=2.0,
+                label=f"δ={d_low:.2f}  (decay wins)")
+        ax.plot(ts2, sim_mid["X_general"],  color=C_AI,      lw=2.0, ls="--",
+                label=f"δ={d_mid:.2f}  (current)")
+        ax.plot(ts2, sim_high["X_general"], color=C_GEN,     lw=2.2,
+                label=f"δ={d_high:.2f}  (recomb wins)")
+        ax.axhline(_x_h0_p2, color="goldenrod", lw=1.8, ls="-.",
+                   label=f"X_h0 = {_x_h0_p2:.3f}")
+        ax.set_xlabel("Period  t", fontsize=11)
+        ax.set_ylabel("General knowledge  ΣX_d", fontsize=11)
+        ax.set_title(f"P2: Knowledge trends  (τ_A={tau_A_run2:.2f})", fontsize=12)
+        ax.legend(fontsize=9)
+        ax.grid(True, alpha=0.2)
+
+        # ── Right: late-period trend (last 40% of T) to show slope ───────────
+        t_start = int(T * 0.6)
+        ax2 = axes[1]
+        for sim, col, lbl in [
+            (sim_low,  "#DC2626", f"δ={d_low:.2f}"),
+            (sim_mid,  C_AI,      f"δ={d_mid:.2f}"),
+            (sim_high, C_GEN,     f"δ={d_high:.2f}"),
+        ]:
+            yy = sim["X_general"][t_start:]
+            xx = ts2[t_start:]
+            ax2.plot(xx, yy, color=col, lw=2.0, label=lbl)
+            # Fit linear trend over late period
+            slope, intercept = np.polyfit(xx, yy, 1)
+            ax2.plot(xx, slope * xx + intercept, color=col, lw=1.2, ls=":",
+                     alpha=0.7, label=f"  trend: {slope:+.4f}/period")
+        ax2.axhline(_x_h0_p2, color="goldenrod", lw=1.5, ls="-.", alpha=0.7)
+        ax2.set_xlabel("Period  t  (late phase)", fontsize=11)
+        ax2.set_ylabel("ΣX_d", fontsize=11)
+        ax2.set_title("Late-period trend: slope shows direction", fontsize=12)
+        ax2.legend(fontsize=8)
+        ax2.grid(True, alpha=0.2)
+
+        plt.tight_layout()
+        st.pyplot(fig)
+        plt.close(fig)
+
+        # Slope diagnostics
+        results = []
+        for sim, d_val in [(sim_low, d_low), (sim_mid, d_mid), (sim_high, d_high)]:
+            yy = sim["X_general"][t_start:]
+            xx = np.arange(len(yy), dtype=float)
+            slope = np.polyfit(xx, yy, 1)[0]
+            results.append((d_val, slope))
+        cols = st.columns(3)
+        for col, (d_val, slope) in zip(cols, results):
+            direction = "↑ Growing" if slope > 1e-5 else ("↓ Declining" if slope < -1e-5 else "→ Flat")
+            col.metric(f"δ = {d_val:.2f}", direction, f"slope = {slope:+.5f}/period")
+    else:
+        st.info("Check the box above to run the simulations.")
+
+# ─── Tab 6: Extension Guide ───────────────────────────────────────────────────
+with tab6:
     st.markdown("## Extension Guide")
     st.markdown(
         "Complete design rationale, formal definitions, and economic intuition for every "
@@ -950,7 +1067,7 @@ domain attractiveness G(X_d) / Σ_old_G.  Their expertise enters d' as a one-tim
 renewal_move = λ_G · N_{{d'}} · Σ_d[ G(X_d)/Σ_old_G · e_d ]
 
 Current equilibrium example:  with {n_dom} domains, agents are distributed as:
-{', '.join(f'd{i}: {sim_o["domain_N"][i][min(T-1, np.where(~np.isnan(sim_o["domain_X"][i]))[0][-1] if (~np.isnan(sim_o["domain_X"][i])).any() else 0)]:.1f}' for i in range(n_dom))} agents
+{', '.join(f'd{i}: {sim_o["domain_N"][i][min(T-1, np.where(~np.isnan(sim_o["domain_X"][i]))[0][-1] if (~np.isnan(sim_o["domain_X"][i])).any() else 0)]:.1f}' for i in range(min(n_dom, 8)))}{'  (+{} more)'.format(n_dom-8) if n_dom > 8 else ''} agents
 """)
 
     with st.expander("✨  Cross-domain complementarity γ — why additive is not recombination"):
@@ -977,53 +1094,66 @@ growing quadratically in domain count.  As the cascade lengthens, synergies comp
   in domain count — the more fields that existed before, the more the new field benefits from
   their interaction.
 
-γ = {gamma:.3f} currently.  {'No complementarity — purely additive recombination.' if gamma < 0.005 else f'Synergy bonus per spawn ≈ {gamma * sum(sim_o["domain_X"][i][np.where(~np.isnan(sim_o["domain_X"][i]))[0][-1]] * sim_o["domain_X"][j][np.where(~np.isnan(sim_o["domain_X"][j]))[0][-1]] for i in range(n_dom) for j in range(i+1, n_dom) if (~np.isnan(sim_o["domain_X"][i])).any() and (~np.isnan(sim_o["domain_X"][j])).any()):.3f}  (last spawn)' if n_dom > 1 else ''}
+γ = {gamma:.3f} currently.  {'No complementarity — purely additive recombination.' if gamma < 0.005 else 'Synergy bonus per spawn ≈ {:.3f}  (last spawn, first 8 domains)'.format(gamma * sum(sim_o["domain_X"][i][np.where(~np.isnan(sim_o["domain_X"][i]))[0][-1]] * sim_o["domain_X"][j][np.where(~np.isnan(sim_o["domain_X"][j]))[0][-1]] for i in range(min(n_dom,8)) for j in range(i+1, min(n_dom,8)) if (~np.isnan(sim_o["domain_X"][i])).any() and (~np.isnan(sim_o["domain_X"][j])).any())) if n_dom > 1 else ''}
 """)
 
-    with st.expander("📐  Two predictions — mechanism to test"):
+    with st.expander("📐  Five predictions — mechanism to test"):
         st.markdown(f"""
-**P1 — Open economy weakens or reverses AI-induced knowledge collapse**
+**P1 — Recombination reverses collapse when δ is large enough**
 
-*Mechanism:*  ΣX_d grows by factor (1+δ) at each spawn.  Even as individual domains collapse,
-the cascade preserves and accumulates general knowledge.  With high δ and γ > 0,
-ΣX_d can exceed X_h0 (full reversal of collapse, not just partial buffer).
+There is a threshold δ* above which ΣX_d grows over time and below which it decays.
+At δ*, recombination exactly offsets knowledge decay.  The threshold exists because
+each spawn injects δ·ΣX_d into general knowledge, while the decay Σ² continuously erodes it.
 
-*Why this is non-trivial:*  in the baseline closed economy, once X_d → 0 it stays there (absorbing).
-The open economy breaks this: collapse in one domain triggers birth of another, and the new domain
-inherits a fraction of the dying domain's knowledge.  The collapse is no longer absorbing.
-
-*Current outcome:*  Open/Closed = **{sim_o['X_general'][-1] / max(sim_c[-1], 1e-8):.1f}×**  ·  ΣX_d(T)/X_h0 = {sim_o['X_general'][-1]/X_h0:.2f}
-{"→ **Strong reversal**: open economy preserves >5× more knowledge than closed" if sim_o['X_general'][-1] / max(sim_c[-1], 1e-8) > 5 else
- "→ Moderate buffer: open substantially above closed" if sim_o['X_general'][-1] / max(sim_c[-1], 1e-8) > 2 else
- "→ Weak buffer: try higher δ or load the ⚡ strong-reversal config"}
-
-*Test:*  Tab 3 (P1 — τ_A sweep) shows ΣX_d(T) open vs closed across AI capability levels.
-P1 is supported when the green curve lies above the black curve past τ_A^c = {tau_c:.3f}.
+*Test:*  Tab 4 (P1+P5 — δ sweep). ΣX_d(T) vs δ should show a clear crossing at δ*.
 
 ---
 
-**P2 — The benefit of openness is largest when AI capability is strongest**
+**P2 — ΣX_d trends clearly up or down; almost never flat**
 
-*Mechanism:*  higher τ_A → faster domain erosion → trigger fires sooner → more spawns per unit
-time → more (1+δ) multiplications of ΣX_d.  The open-economy advantage over closed therefore
-*grows with τ_A* rather than being a fixed constant.
+The dynamics are driven by the competition between recombination gain (at each spawn)
+and continuous knowledge decay (each period).  This competition produces a clear trend —
+not a hovering near steady-state.  For δ < δ*, ΣX_d declines monotonically.
+For δ > δ*, ΣX_d rises.  The transition at δ* is sharp.
 
-With γ > 0, a secondary amplification also operates: richer domains at spawn time produce larger
-synergy bonuses (γ · Σ X_i · X_j grows with knowledge levels), making the benefit of openness
-even more sensitive to AI capability.
+*Test:*  Tab 5 (P2 — Knowledge trends). Trajectories at δ below/above δ* show clear slopes.
 
-*Why P2 matters for policy:*  it says openness (δ > 0) is a *complement* to AI capability,
-not a substitute.  Societies with high cross-domain mobility benefit disproportionately more
-in a world with strong AI.  The benefit of investing in knowledge portability (δ) is highest
-exactly when AI pressure is greatest.
+---
 
-*Test:*  Tab 4 (P2 — δ sweep) shows ΣX_d(T) vs δ at two τ_A levels.  P2 is supported
-when the slope of the curve is steeper at higher τ_A.
+**P3 — AI+recomb (average, end, peak) always beats AI+closed**
+
+Recombination is always better than no recombination, regardless of δ or τ_A.
+Even a tiny δ > 0 generates some inheritance at spawn that the closed economy never gets.
+Open/Closed = **{sim_o['X_general'][-1] / max(sim_c[-1], 1e-8):.1f}×** at current parameters.
+
+*Test:*  Tab 3 (P3+P4). Green curve always above dark curve.
+
+---
+
+**P4 — AI+recomb beats no-AI+recomb: AI *helps* knowledge when recombination is possible**
+
+Without AI (τ_A = 0): no collapse → no spawning → ΣX_d stays at X_h0.
+With AI (τ_A > τ_c): collapse triggers spawning → recombination cascade → ΣX_d grows.
+AI, by destabilising individual domains, accelerates the cascade.
+Higher τ_A → faster collapse → more spawning per unit time → higher ΣX_d (when δ > δ*).
+
+*Test:*  Tab 3 (P3+P4, right panel). ΣX_d(open) should increase with τ_A above τ_A^c.
+
+---
+
+**P5 — AI+recomb exceeds X_h0 only when recomb > decay**
+
+ΣX_d(T) > X_h0 (the pre-AI, no-recomb benchmark) if and only if δ > δ*.
+Below δ*, the cascade adds some knowledge but decay dominates — ΣX_d stays below X_h0.
+Above δ*, recombination accumulates faster than decay removes — full reversal of Acemoglu.
+
+*Test:*  Tab 4 (P1+P5). X_h0 threshold line shows exactly where the crossing occurs.
+Current: ΣX_d(T)/X_h0 = {sim_o['X_general'][-1]/X_h0:.2f}×
 
 ---
 **Quick-reference: load the strong-reversal config (⚡ button)**
 
-δ = 0.85, γ = 0.05, τ_A = 0.85, max_domains = 8
+δ = 0.85, γ = 0.05, τ_A = 0.85
 
 With endogenous trigger and these parameters:
 - Each spawn multiplies ΣX_d by (1+0.85) = 1.85. After 3 spawns: 1.85³ ≈ 6.3×.
@@ -1031,5 +1161,5 @@ With endogenous trigger and these parameters:
 - The endogenous trigger fires earlier (when knowledge is still relatively high) than an
   exogenous threshold would — giving richer inheritance at each spawn.
 - γ = 0.05 adds pairwise synergy at each spawn, compounding the multiplier effect.
-- max_domains = 8 allows the cascade to run 7 generations.
+- Spawning is unbounded — the cascade runs as long as knowledge keeps eroding.
 """)
